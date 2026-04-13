@@ -1,0 +1,5 @@
+users = []
+wardrobe_items = []
+outfits = []
+planner = []
+feed = []
