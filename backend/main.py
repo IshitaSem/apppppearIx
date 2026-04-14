@@ -32,7 +32,12 @@ app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 @app.on_event("startup")
 def startup_event():
-    test_mongodb_connection()
+    try:
+        print("Starting Appearix backend...")
+        test_mongodb_connection()
+        print("Startup completed")
+    except Exception as e:
+        print("MongoDB startup failed:", e)
 
 
 @app.get("/")
