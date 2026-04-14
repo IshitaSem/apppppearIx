@@ -1,13 +1,11 @@
-rembg
-onnxruntime
 fastapi
 uvicorn
 pymongo
 python-multipart
 pydantic
 python-jose
-passlib
-bcrypt
+passlib[bcrypt]
 pillow
+python-dotenv
 rembg
 onnxruntime
