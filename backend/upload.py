@@ -14,19 +14,24 @@ router = APIRouter(prefix="/upload", tags=["Upload"])
 UPLOAD_FOLDER = "uploads"
 UPLOAD_URL_PREFIX = "/uploads"
 
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Keep rembg lazy and safe for deployment environments like Render.
+REMBG_AVAILABLE = False
+REMBG_SESSION = None
+remove = None
+new_session = None
 
 try:
-    from rembg import remove, new_session
+    from rembg import remove, new_session  # type: ignore
     REMBG_AVAILABLE = True
-    REMBG_SESSION = None
+    logger.info("rembg imported successfully")
 except Exception as e:
     REMBG_AVAILABLE = False
-    REMBG_SESSION = None
-    logging.warning(f"rembg not available: {e}")
-
-logger = logging.getLogger(__name__)
+    logger.warning(f"rembg not available during import: {e}")
 
 
 def get_dominant_color(image_path: str) -> str:
@@ -59,37 +64,6 @@ def get_dominant_color(image_path: str) -> str:
         return "unknown"
 
 
-def detect_clothing_type(filename: str) -> str:
-    name = filename.lower()
-
-    top_keywords = [
-        "shirt", "tshirt", "t-shirt", "top", "hoodie",
-        "sweater", "tee", "blouse", "kurti"
-    ]
-    bottom_keywords = [
-        "jeans", "pant", "pants", "trouser", "bottom",
-        "skirt", "shorts", "leggings"
-    ]
-    shoes_keywords = [
-        "shoe", "shoes", "sneaker", "heel", "heels",
-        "boot", "boots", "sandals"
-    ]
-
-    for word in top_keywords:
-        if word in name:
-            return "top"
-
-    for word in bottom_keywords:
-        if word in name:
-            return "bottom"
-
-    for word in shoes_keywords:
-        if word in name:
-            return "shoes"
-
-    return "unknown"
-
-
 def pick_uploaded_file(
     file: Optional[UploadFile],
     image: Optional[UploadFile],
@@ -101,6 +75,29 @@ def pick_uploaded_file(
             detail="No uploaded file found. Send multipart field 'file' or 'image'."
         )
     return uploaded
+
+
+def get_rembg_session():
+    global REMBG_SESSION
+
+    if not REMBG_AVAILABLE or remove is None or new_session is None:
+        raise RuntimeError("rembg is not available")
+
+    if REMBG_SESSION is None:
+        logger.info("Creating rembg session...")
+        REMBG_SESSION = new_session()
+        logger.info("rembg session created successfully")
+
+    return REMBG_SESSION
+
+
+@router.get("/ping")
+def ping():
+    return {
+        "success": True,
+        "message": "Upload router is working",
+        "rembg_available": REMBG_AVAILABLE,
+    }
 
 
 @router.post("/")
@@ -147,15 +144,12 @@ async def upload_image(
     processing_error = None
 
     if use_bg_removal:
-        if not REMBG_AVAILABLE:
+        if not REMBG_AVAILABLE or remove is None or new_session is None:
             processing_error = "Background remover not available"
-            logger.warning("BG removal requested but rembg is not installed")
+            logger.warning("BG removal requested but rembg is not available")
         else:
             try:
-                global REMBG_SESSION
-
-                if REMBG_SESSION is None:
-                    REMBG_SESSION = new_session()
+                session = get_rembg_session()
 
                 input_image = Image.open(io.BytesIO(content))
                 if input_image.mode not in ("RGB", "RGBA"):
@@ -163,7 +157,7 @@ async def upload_image(
                 elif input_image.mode == "RGBA":
                     input_image = input_image.convert("RGB")
 
-                result = remove(input_image, session=REMBG_SESSION)
+                result = remove(input_image, session=session)
 
                 bg_removed_filename = f"bg_removed_{file_id}.png"
                 bg_removed_path = os.path.join(UPLOAD_FOLDER, bg_removed_filename)
@@ -186,23 +180,27 @@ async def upload_image(
 
     final_image_path = os.path.join(UPLOAD_FOLDER, final_filename)
 
-    from wardrobe import CATEGORY_MAP
-    
     try:
-        detected_color = get_dominant_color(final_image_path)
+        from wardrobe import CATEGORY_MAP
         raw_category = category.strip().lower()
         normalized_category = CATEGORY_MAP.get(raw_category, raw_category)
     except Exception as e:
+        logger.warning(f"Category normalization failed: {e}")
+        raw_category = category.strip().lower()
+        normalized_category = raw_category
+
+    try:
+        detected_color = get_dominant_color(final_image_path)
+    except Exception as e:
         logger.warning(f"Attribute detection failed: {e}")
         detected_color = "unknown"
-        normalized_category = raw_category
 
     item = {
         "id": file_id,
         "user_id": user_id,
         "name": item_name.strip(),
         "category": normalized_category,
-"color": detected_color,
+        "color": detected_color,
         "image_path": final_filename,
         "image_url": f"{UPLOAD_URL_PREFIX}/{final_filename}",
         "original_image_url": f"{UPLOAD_URL_PREFIX}/{original_filename}",
@@ -211,31 +209,29 @@ async def upload_image(
     }
 
     try:
-        print(f"DEBUG UPLOAD: Received - user_id={user_id}, item_name={item_name}, category={category}")
-        print(f"DEBUG UPLOAD: Final saved file path: {final_image_path}")
-        print(f"DEBUG UPLOAD: Item dict before insert: {item}")
-        
+        logger.info(
+            f"UPLOAD: user_id={user_id}, item_name={item_name}, "
+            f"category={category}, normalized_category={normalized_category}"
+        )
+        logger.info(f"UPLOAD: final file path={final_image_path}")
+
         result = wardrobe_collection.insert_one(item)
         inserted_doc = wardrobe_collection.find_one({"_id": result.inserted_id})
         serialized_item = serialize_doc(inserted_doc)
-        print(f"DEBUG UPLOAD: Inserted ID: {serialized_item['_id']}")
-        
-        print(f"DEBUG UPLOAD: Insert successful for item_id={serialized_item['_id']}")
-        
+
         return {
             "success": True,
-            "message": "Image uploaded successfully" if not processing_error else f"Image uploaded, {processing_error}",
+            "message": (
+                "Image uploaded successfully"
+                if not processing_error
+                else f"Image uploaded, {processing_error}"
+            ),
             "data": serialized_item,
             "error": processing_error
         }
     except Exception as e:
-        import traceback
-        print(f"DEBUG UPLOAD ERROR: Full traceback: {traceback.format_exc()}")
-        print(f"DEBUG UPLOAD ERROR: Exception: {str(e)}")
-        return {
-            "success": False,
-            "message": f"Upload failed: {str(e)}"
-        }
+        logger.exception("UPLOAD ERROR")
+        raise HTTPException(status_code=500, detail=f"Upload failed: {str(e)}")
 
 
 @router.post("/remove-background")
@@ -259,7 +255,7 @@ async def remove_background(
         logger.error(f"Invalid image file: {e}")
         raise HTTPException(status_code=400, detail="Invalid image file")
 
-    if not REMBG_AVAILABLE:
+    if not REMBG_AVAILABLE or remove is None or new_session is None:
         logger.warning("rembg not available, returning original image")
         buffered = io.BytesIO()
         original_image.save(buffered, format="PNG")
@@ -276,13 +272,10 @@ async def remove_background(
         }
 
     try:
-        global REMBG_SESSION
-
-        if REMBG_SESSION is None:
-            REMBG_SESSION = new_session()
+        session = get_rembg_session()
 
         input_image = original_image.convert("RGB")
-        result = remove(input_image, session=REMBG_SESSION)
+        result = remove(input_image, session=session)
 
         if isinstance(result, Image.Image):
             result_image = result.convert("RGBA")
