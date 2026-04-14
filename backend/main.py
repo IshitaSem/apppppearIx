@@ -6,7 +6,7 @@ import uvicorn
 
 from database import test_mongodb_connection
 
-# from upload import router as upload_router
+from upload import router as upload_router
 from auth import router as auth_router
 from wardrobe import router as wardrobe_router
 from outfit import router as outfit_router
@@ -55,7 +55,7 @@ def test_db():
     return {"mongodb_connected": success}
 
 
-# app.include_router(upload_router)
+app.include_router(upload_router)
 app.include_router(auth_router)
 app.include_router(wardrobe_router)
 app.include_router(outfit_router)
