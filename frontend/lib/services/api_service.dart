@@ -4,7 +4,7 @@ import 'package:http/http.dart' as http;
 import '../models/trend_post.dart';
 
 class ApiService {
-static const String baseUrl = 'http://127.0.0.1:8000';
+static const String baseUrl = 'https://apppearix-1.onrender.com';
   static Future<Map<String, dynamic>?> register({
     required String email,
     required String password,
