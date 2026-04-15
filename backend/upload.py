@@ -142,7 +142,6 @@ async def upload_image(
     bg_removed = False
     processing_error = None
 
-    # BG removal disabled on Railway - use external service if needed
     if use_bg_removal:
         processing_error = "Background removal disabled on this server"
         logger.info("BG removal requested but disabled for Railway")
