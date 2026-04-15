@@ -11,9 +11,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 UPLOAD_FOLDER = "uploads"
-BASE_URL = os.getenv("BASE_URL", "http://192.168.1.3:8000")
+BASE_URL = os.getenv("BASE_URL", "http://192.168.1.3:8000").rstrip("/")
 
-"image_url": f"{BASE_URL}/uploads/{original_filename}",
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 router = APIRouter(prefix="/feed", tags=["Global Feed"])
