@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form, Request
+from fastapi import APIRouter, HTTPException, UploadFile, File, Form
 from database import feed_collection, users_collection, serialize_doc, serialize_list
 from pydantic import BaseModel
 from pymongo import DESCENDING
@@ -11,20 +11,11 @@ import logging
 logger = logging.getLogger(__name__)
 
 UPLOAD_FOLDER = "uploads"
+BASE_URL = os.getenv("BASE_URL", "http://192.168.1.3:8000").rstrip("/")
+
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 router = APIRouter(prefix="/feed", tags=["Global Feed"])
-
-
-def get_base_url(request: Request) -> str:
-    env_base_url = os.getenv("BASE_URL", "").strip()
-    if env_base_url:
-        return env_base_url.rstrip("/")
-    return str(request.base_url).rstrip("/")
-
-
-def build_file_url(request: Request, filename: str) -> str:
-    return f"{get_base_url(request)}/uploads/{filename}"
 
 
 class LikeRequest(BaseModel):
@@ -46,7 +37,6 @@ class PostResponse(BaseModel):
 
 @router.post("/posts")
 async def create_post(
-    request: Request,
     user_id: str = Form(...),
     caption: str = Form(...),
     image: UploadFile = File(...)
@@ -67,12 +57,16 @@ async def create_post(
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded image is empty")
 
-    with open(original_path, "wb") as f:
-        f.write(content)
+    try:
+        with open(original_path, "wb") as f:
+            f.write(content)
+    except Exception as e:
+        logger.error(f"Failed to save post image: {e}")
+        raise HTTPException(status_code=500, detail="Failed to save post image")
 
     user_doc = serialize_doc(users_collection.find_one({"id": user_id}))
     username = "Anonymous"
-    if user_doc and user_doc.get("email"):
+    if user_doc and "email" in user_doc:
         username = user_doc["email"].split("@")[0].capitalize()
 
     post = {
@@ -80,7 +74,7 @@ async def create_post(
         "user_id": user_id,
         "username": username,
         "caption": caption.strip(),
-        "image_url": build_file_url(request, original_filename),
+        "image_url": f"{BASE_URL}/uploads/{original_filename}",
         "image_path": original_filename,
         "created_at": datetime.utcnow().isoformat(),
         "likes_count": 0,
@@ -91,24 +85,28 @@ async def create_post(
     }
 
     result = feed_collection.insert_one(post)
-    logger.info(f"Created post {file_id} by {user_id}")
-
     inserted_post = serialize_doc(feed_collection.find_one({"_id": result.inserted_id}))
+
+    logger.info(f"Created post {file_id} by {user_id}")
 
     return {
         "success": True,
+        "message": "Post created successfully",
         "post": inserted_post
     }
 
 
 @router.get("/posts")
 def get_posts(user_id: Optional[str] = None):
-    posts = serialize_list(list(feed_collection.find().sort("created_at", DESCENDING)))
+    posts_cursor = feed_collection.find().sort("created_at", DESCENDING)
+    posts = serialize_list(posts_cursor)
+
     if user_id:
         for p in posts:
             p["is_liked_by_current_user"] = user_id in p.get("likes_by", [])
             p["is_disliked_by_current_user"] = user_id in p.get("dislikes_by", [])
             p["is_saved_by_current_user"] = user_id in p.get("saved_by", [])
+
     return {"feed": posts}
 
 
@@ -216,9 +214,12 @@ def toggle_save(post_id: str, request: LikeRequest):
 
 @router.get("/saved/{user_id}")
 def get_saved(user_id: str):
-    saved = serialize_list(list(feed_collection.find({"saved_by": user_id})))
+    saved_cursor = feed_collection.find({"saved_by": user_id})
+    saved = serialize_list(saved_cursor)
+
     for p in saved:
         p["is_liked_by_current_user"] = user_id in p.get("likes_by", [])
         p["is_disliked_by_current_user"] = user_id in p.get("dislikes_by", [])
         p["is_saved_by_current_user"] = True
+
     return {"saved": saved}
