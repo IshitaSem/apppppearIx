@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request
 from typing import Optional
 import uuid
 import os
@@ -12,14 +12,11 @@ from database import wardrobe_collection, serialize_doc
 router = APIRouter(prefix="/upload", tags=["Upload"])
 
 UPLOAD_FOLDER = "uploads"
-UPLOAD_URL_PREFIX = "/uploads"
-
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Keep rembg lazy and safe for deployment environments like Render.
 REMBG_AVAILABLE = False
 REMBG_SESSION = None
 remove = None
@@ -32,6 +29,17 @@ try:
 except Exception as e:
     REMBG_AVAILABLE = False
     logger.warning(f"rembg not available during import: {e}")
+
+
+def get_base_url(request: Request) -> str:
+    env_base_url = os.getenv("BASE_URL", "").strip()
+    if env_base_url:
+        return env_base_url.rstrip("/")
+    return str(request.base_url).rstrip("/")
+
+
+def build_file_url(request: Request, filename: str) -> str:
+    return f"{get_base_url(request)}/uploads/{filename}"
 
 
 def get_dominant_color(image_path: str) -> str:
@@ -102,6 +110,7 @@ def ping():
 
 @router.post("/")
 async def upload_image(
+    request: Request,
     user_id: str = Form(...),
     use_bg_removal: bool = Form(False),
     item_name: str = Form(...),
@@ -202,8 +211,8 @@ async def upload_image(
         "category": normalized_category,
         "color": detected_color,
         "image_path": final_filename,
-        "image_url": f"{UPLOAD_URL_PREFIX}/{final_filename}",
-        "original_image_url": f"{UPLOAD_URL_PREFIX}/{original_filename}",
+        "image_url": build_file_url(request, final_filename),
+        "original_image_url": build_file_url(request, original_filename),
         "background_removed": bg_removed,
         "created_at": datetime.utcnow().isoformat()
     }
@@ -312,3 +321,4 @@ async def remove_background(
             },
             "error": str(e)
         }
+
