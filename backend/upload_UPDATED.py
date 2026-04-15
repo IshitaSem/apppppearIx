@@ -12,12 +12,11 @@ from database import wardrobe_collection
 router = APIRouter(prefix="/upload", tags=["Upload"])
 
 UPLOAD_FOLDER = "uploads"
-BASE_URL = os.getenv("BASE_URL", "http://192.168.1.3:8000")  # URL prefix for served uploads
-"image_url": f"{BASE_URL}/uploads/{final_filename}",
-"original_image_url": f"{BASE_URL}/uploads/{original_filename}",
+BASE_URL = os.getenv("BASE_URL", "http://192.168.1.3:8000").rstrip("/")
 
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+logger = logging.getLogger(__name__)
 
 try:
     from rembg import remove
@@ -25,8 +24,6 @@ try:
 except Exception as e:
     REMBG_AVAILABLE = False
     logging.warning(f"rembg not available: {e}")
-
-logger = logging.getLogger(__name__)
 
 
 def get_dominant_color(image_path: str) -> str:
@@ -40,20 +37,19 @@ def get_dominant_color(image_path: str) -> str:
 
         if b > r and b > g:
             return "blue"
-        elif r > g and r > b:
+        if r > g and r > b:
             return "red"
-        elif g > r and g > b:
+        if g > r and g > b:
             return "green"
-        elif r > 180 and g > 180 and b > 180:
+        if r > 180 and g > 180 and b > 180:
             return "white"
-        elif r < 70 and g < 70 and b < 70:
+        if r < 70 and g < 70 and b < 70:
             return "black"
-        elif r > 150 and g > 100 and b < 100:
+        if r > 150 and g > 100 and b < 100:
             return "brown"
-        elif r > 180 and g > 180 and b < 120:
+        if r > 180 and g > 180 and b < 120:
             return "yellow"
-        else:
-            return "unknown"
+        return "unknown"
     except Exception as e:
         logger.warning(f"Color detection failed: {e}")
         return "unknown"
@@ -103,6 +99,16 @@ def pick_uploaded_file(
     return uploaded
 
 
+@router.get("/ping")
+def ping():
+    return {
+        "success": True,
+        "message": "Upload router is working",
+        "rembg_available": REMBG_AVAILABLE,
+        "base_url": BASE_URL,
+    }
+
+
 @router.post("/")
 async def upload_image(
     user_id: str = Form(...),
@@ -110,19 +116,18 @@ async def upload_image(
     file: Optional[UploadFile] = File(None),
     image: Optional[UploadFile] = File(None),
 ):
-    """Upload image with optional background removal. Returns backend-served URLs."""
     uploaded_file = pick_uploaded_file(file, image)
 
     if not uploaded_file.filename:
         raise HTTPException(status_code=400, detail="No file uploaded")
 
-    # Validate file type
-    allowed_extensions = {'jpg', 'jpeg', 'png', 'gif', 'webp'}
+    allowed_extensions = {"jpg", "jpeg", "png", "gif", "webp"}
     file_ext = uploaded_file.filename.split(".")[-1].lower()
+
     if file_ext not in allowed_extensions:
         raise HTTPException(
-            status_code=400, 
-            detail=f"File type .{file_ext} not allowed. Use: {', '.join(allowed_extensions)}"
+            status_code=400,
+            detail=f"File type .{file_ext} not allowed. Use: {', '.join(sorted(allowed_extensions))}"
         )
 
     file_id = str(uuid.uuid4())
@@ -134,15 +139,13 @@ async def upload_image(
     if not content:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
-    # Save original
     try:
         with open(original_path, "wb") as f:
             f.write(content)
     except Exception as e:
         logger.error(f"Failed to save image: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to save image")
+        raise HTTPException(status_code=500, detail="Failed to save image")
 
-    # Attempt BG removal
     final_filename = original_filename
     bg_removed = False
     processing_error = None
@@ -154,32 +157,32 @@ async def upload_image(
         else:
             try:
                 input_image = Image.open(io.BytesIO(content))
-                if input_image.mode == 'RGBA':
-                    input_image = input_image.convert('RGB')
-                
+                if input_image.mode == "RGBA":
+                    input_image = input_image.convert("RGB")
+
                 result = remove(input_image)
-                
+
                 bg_removed_filename = f"bg_removed_{file_id}.png"
                 bg_removed_path = os.path.join(UPLOAD_FOLDER, bg_removed_filename)
-                
+
                 if isinstance(result, Image.Image):
                     result.save(bg_removed_path, "PNG")
                 else:
                     with open(bg_removed_path, "wb") as out:
                         out.write(result)
-                
+
                 final_filename = bg_removed_filename
                 bg_removed = True
                 logger.info(f"Background removed: {file_id}")
+
             except Exception as e:
-                # Graceful fallback
                 logger.warning(f"BG removal failed: {e}")
-                processing_error = f"Background removal failed"
+                processing_error = "Background removal failed"
                 final_filename = original_filename
                 bg_removed = False
 
-    # Detect attributes
     final_image_path = os.path.join(UPLOAD_FOLDER, final_filename)
+
     try:
         detected_color = get_dominant_color(final_image_path)
         detected_category = detect_clothing_type(uploaded_file.filename)
@@ -188,24 +191,32 @@ async def upload_image(
         detected_color = "unknown"
         detected_category = "unknown"
 
-    # Response with backend URLs
     item = {
         "id": file_id,
         "user_id": user_id,
-        "name": uploaded_file.filename.split(".")[0],
+        "name": os.path.splitext(uploaded_file.filename)[0],
         "category": detected_category.lower(),
         "color": detected_color,
-        "image_url": f"{UPLOAD_URL_PREFIX}/{final_filename}",
-        "original_image_url": f"{UPLOAD_URL_PREFIX}/{original_filename}",
+        "image_path": final_filename,
+        "image_url": f"{BASE_URL}/uploads/{final_filename}",
+        "original_image_url": f"{BASE_URL}/uploads/{original_filename}",
         "background_removed": bg_removed,
         "created_at": datetime.utcnow().isoformat()
     }
 
-    wardrobe_collection.insert_one(...)
+    try:
+        wardrobe_collection.insert_one(item)
+    except Exception as e:
+        logger.error(f"Failed to save wardrobe item: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to save wardrobe item: {str(e)}")
 
     return {
         "success": True,
-        "message": "Image uploaded successfully" if not processing_error else f"Image uploaded, {processing_error}",
+        "message": (
+            "Image uploaded successfully"
+            if not processing_error
+            else f"Image uploaded, {processing_error}"
+        ),
         "data": item,
         "error": processing_error
     }
@@ -216,7 +227,6 @@ async def remove_background(
     file: Optional[UploadFile] = File(None),
     image: Optional[UploadFile] = File(None),
 ):
-    """Remove background and return base64."""
     if not REMBG_AVAILABLE:
         raise HTTPException(
             status_code=400,
@@ -235,20 +245,20 @@ async def remove_background(
 
     try:
         input_image = Image.open(io.BytesIO(content))
-        if input_image.mode == 'RGBA':
-            input_image = input_image.convert('RGB')
-        
+        if input_image.mode == "RGBA":
+            input_image = input_image.convert("RGB")
+
         result = remove(input_image)
-        
+
         if isinstance(result, Image.Image):
-            result_bytes = io.BytesIO()
-            result.save(result_bytes, format="PNG")
-            result_bytes = result_bytes.getvalue()
+            result_bytes_io = io.BytesIO()
+            result.save(result_bytes_io, format="PNG")
+            result_bytes = result_bytes_io.getvalue()
         else:
             result_bytes = result
-        
+
         encoded_image = base64.b64encode(result_bytes).decode("utf-8")
-        
+
         return {
             "success": True,
             "message": "Background removed successfully",
@@ -257,6 +267,7 @@ async def remove_background(
             },
             "error": None
         }
+
     except Exception as e:
         logger.error(f"BG removal failed: {e}")
         raise HTTPException(
