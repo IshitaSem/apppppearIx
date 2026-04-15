@@ -22,7 +22,6 @@ class Database:
             self._client = pymongo.MongoClient(self.mongo_url)
             self._db = self._client["appearix"]
 
-            # Test Mongo connection
             self._client.admin.command("ping")
             logger.info("MongoDB connected successfully")
         except ConnectionFailure:
@@ -53,7 +52,6 @@ class Database:
         return self._db["feed"]
 
     def get_user_items(self, user_id: str) -> List[Dict]:
-        """Get wardrobe items for a user."""
         try:
             return list(
                 self.wardrobe_collection.find({"user_id": user_id}).sort(
@@ -65,7 +63,6 @@ class Database:
             return []
 
     def add_item(self, item: Dict) -> Optional[Dict]:
-        """Add wardrobe item."""
         try:
             item["created_at"] = item.get("created_at", datetime.utcnow())
             result = self.wardrobe_collection.insert_one(item)
@@ -76,7 +73,6 @@ class Database:
             return None
 
     def get_item(self, item_id: str) -> Optional[Dict]:
-        """Get a single wardrobe item by app-level id."""
         try:
             return self.wardrobe_collection.find_one({"id": item_id})
         except PyMongoError as e:
@@ -84,7 +80,6 @@ class Database:
             return None
 
     def update_item(self, item_id: str, updates: Dict) -> bool:
-        """Update wardrobe item."""
         try:
             updates["updated_at"] = datetime.utcnow()
             result = self.wardrobe_collection.update_one(
@@ -97,7 +92,6 @@ class Database:
             return False
 
     def delete_item(self, item_id: str) -> bool:
-        """Delete wardrobe item."""
         try:
             result = self.wardrobe_collection.delete_one({"id": item_id})
             return result.deleted_count > 0
@@ -106,7 +100,6 @@ class Database:
             return False
 
     def create_user(self, user: Dict) -> Optional[Dict]:
-        """Create user."""
         try:
             user["email"] = user.get("email", "").lower()
             user["created_at"] = user.get("created_at", datetime.utcnow())
@@ -118,7 +111,6 @@ class Database:
             return None
 
     def get_user_by_email(self, email: str) -> Optional[Dict]:
-        """Get user by email."""
         try:
             return self.users_collection.find_one({"email": email.lower()})
         except PyMongoError as e:
@@ -126,7 +118,6 @@ class Database:
             return None
 
     def get_user_by_id(self, user_id: str) -> Optional[Dict]:
-        """Get user by ID."""
         try:
             return self.users_collection.find_one({"id": user_id})
         except PyMongoError as e:
@@ -134,7 +125,6 @@ class Database:
             return None
 
     def save_outfit(self, outfit: Dict) -> Optional[Dict]:
-        """Save generated outfit."""
         try:
             outfit["created_at"] = outfit.get("created_at", datetime.utcnow())
             result = self.outfits_collection.insert_one(outfit)
@@ -145,7 +135,6 @@ class Database:
             return None
 
     def get_user_outfits(self, user_id: str) -> List[Dict]:
-        """Get outfits for a user."""
         try:
             return list(
                 self.outfits_collection.find({"user_id": user_id}).sort(
@@ -157,7 +146,6 @@ class Database:
             return []
 
     def save_plan(self, plan: Dict) -> Optional[Dict]:
-        """Save planner item."""
         try:
             plan["created_at"] = plan.get("created_at", datetime.utcnow())
             result = self.planner_collection.insert_one(plan)
@@ -168,7 +156,6 @@ class Database:
             return None
 
     def get_user_plans(self, user_id: str) -> List[Dict]:
-        """Get planner items for a user."""
         try:
             return list(
                 self.planner_collection.find({"user_id": user_id}).sort(
@@ -180,7 +167,6 @@ class Database:
             return []
 
     def create_post(self, post: Dict) -> Optional[Dict]:
-        """Create feed post."""
         try:
             post["created_at"] = post.get("created_at", datetime.utcnow())
             post.setdefault("likes_by", [])
@@ -197,7 +183,6 @@ class Database:
             return None
 
     def get_posts(self, user_id: Optional[str] = None) -> List[Dict]:
-        """Get feed posts."""
         try:
             pipeline = [{"$sort": {"created_at": -1}}]
 
@@ -224,7 +209,6 @@ class Database:
             return []
 
     def update_post_interaction(self, post_id: str, user_id: str, action: str) -> bool:
-        """Like, dislike, save, or unsave a post."""
         try:
             post = self.feed_collection.find_one({"id": post_id})
             if not post:
@@ -245,6 +229,11 @@ class Database:
                     update_query.setdefault("$pull", {})["dislikes_by"] = user_id
                     update_query.setdefault("$inc", {})["dislikes_count"] = -1
 
+            elif action == "unlike":
+                if user_id in likes_by:
+                    update_query.setdefault("$pull", {})["likes_by"] = user_id
+                    update_query.setdefault("$inc", {})["likes_count"] = -1
+
             elif action == "dislike":
                 if user_id not in dislikes_by:
                     update_query.setdefault("$addToSet", {})["dislikes_by"] = user_id
@@ -253,6 +242,11 @@ class Database:
                 if user_id in likes_by:
                     update_query.setdefault("$pull", {})["likes_by"] = user_id
                     update_query.setdefault("$inc", {})["likes_count"] = -1
+
+            elif action == "undislike":
+                if user_id in dislikes_by:
+                    update_query.setdefault("$pull", {})["dislikes_by"] = user_id
+                    update_query.setdefault("$inc", {})["dislikes_count"] = -1
 
             elif action == "save":
                 if user_id not in saved_by:
@@ -273,7 +267,6 @@ class Database:
             return False
 
     def get_saved_posts(self, user_id: str) -> List[Dict]:
-        """Get saved posts for a user."""
         try:
             return list(
                 self.feed_collection.find({"saved_by": user_id}).sort(
@@ -283,6 +276,13 @@ class Database:
         except PyMongoError as e:
             logger.error(f"Error getting saved posts: {e}")
             return []
+
+    def get_post_by_id(self, post_id: str) -> Optional[Dict]:
+        try:
+            return self.feed_collection.find_one({"id": post_id})
+        except PyMongoError as e:
+            logger.error(f"Error getting post by id {post_id}: {e}")
+            return None
 
 
 db = Database()
