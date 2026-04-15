@@ -7,8 +7,8 @@ router = APIRouter(prefix="/ai", tags=["AI Stylist"])
 @router.get("/generate-outfit")
 def generate_outfit(user_id: str, occasion: str):
     try:
-        # get items from MongoDB
-        items = db.get_items_by_user(user_id)
+        # use correct DB function
+        items = db.get_user_items(user_id)
 
         if not items:
             raise HTTPException(status_code=400, detail="No wardrobe items found")
@@ -36,7 +36,7 @@ def generate_outfit(user_id: str, occasion: str):
 
         return {
             "success": True,
-            "message": "Outfit generated",
+            "message": "Outfit generated successfully",
             "data": outfit
         }
 
