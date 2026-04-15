@@ -15,46 +15,89 @@ from ai_stylist import router as ai_stylist_router
 from feed import router as feed_router
 from fashion_tools import router as fashion_tools_router
 
-app = FastAPI(title="Appearix Backend")
+app = FastAPI(
+    title="Appearix Backend",
+    version="1.0.0",
+    description="Backend API for Appearix - Smart Wardrobe Styling"
+)
+
+# =========================
+# CORS CONFIG
+# =========================
+# For public demo:
+# add your real frontend URLs here.
+# You can also set FRONTEND_URLS in Render environment variables like:
+# https://appearix-frontend.web.app,https://appearix-frontend.firebaseapp.com
+
+frontend_urls_env = os.getenv(
+    "FRONTEND_URLS",
+    "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5000,http://127.0.0.1:5000,https://appearix-frontend.web.app,https://appearix-frontend.firebaseapp.com"
+)
+
+allowed_origins = [url.strip() for url in frontend_urls_env.split(",") if url.strip()]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
+    allow_origins=allowed_origins,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
+# =========================
+# STATIC FILES
+# =========================
 os.makedirs("uploads", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 
+# =========================
+# STARTUP
+# =========================
 @app.on_event("startup")
 def startup_event():
+    print("Starting Appearix backend...")
+    print("Allowed CORS origins:", allowed_origins)
     try:
-        print("Starting Appearix backend...")
-        test_mongodb_connection()
-        print("Startup completed")
+        db_ok = test_mongodb_connection()
+        print("MongoDB connected:", db_ok)
     except Exception as e:
-        print("MongoDB startup failed:", e)
+        print("MongoDB startup failed:", str(e))
 
 
+# =========================
+# BASIC ROUTES
+# =========================
 @app.get("/")
 def home():
-    return {"message": "Backend is running"}
+    return {
+        "message": "Appearix backend is running",
+        "status": "ok"
+    }
 
 
 @app.get("/health")
 def health():
-    return {"status": "healthy"}
+    return {
+        "status": "healthy"
+    }
 
 
 @app.get("/test-db")
 def test_db():
-    success = test_mongodb_connection()
-    return {"mongodb_connected": success}
+    try:
+        success = test_mongodb_connection()
+        return {"mongodb_connected": success}
+    except Exception as e:
+        return {
+            "mongodb_connected": False,
+            "error": str(e)
+        }
 
 
+# =========================
+# ROUTERS
+# =========================
 app.include_router(upload_router)
 app.include_router(auth_router)
 app.include_router(wardrobe_router)
@@ -65,5 +108,9 @@ app.include_router(feed_router)
 app.include_router(fashion_tools_router)
 
 
+# =========================
+# LOCAL RUN
+# =========================
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
