@@ -9,6 +9,8 @@ import logging
 from datetime import datetime
 from database import db
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/upload", tags=["Upload"])
 
 UPLOAD_FOLDER = "uploads"
@@ -21,8 +23,6 @@ if not os.path.exists(UPLOAD_FOLDER):
 REMBG_AVAILABLE = False
 REMBG_SESSION = None
 logger.warning("rembg disabled for production/Railway deployment")
-
-logger = logging.getLogger(__name__)
 
 
 def get_dominant_color(image_path: str) -> str:
@@ -150,9 +150,10 @@ async def upload_image(
     final_image_path = os.path.join(UPLOAD_FOLDER, final_filename)
 
     from wardrobe import CATEGORY_MAP
+    raw_category = category.strip().lower()
+
     try:
         detected_color = get_dominant_color(final_image_path)
-        raw_category = category.strip().lower()
         normalized_category = CATEGORY_MAP.get(raw_category, raw_category)
     except Exception as e:
         logger.warning(f"Attribute detection failed: {e}")
@@ -169,6 +170,7 @@ async def upload_image(
         "image_url": f"{UPLOAD_URL_PREFIX}/{final_filename}",
         "original_image_url": f"{UPLOAD_URL_PREFIX}/{original_filename}",
         "background_removed": bg_removed,
+        "processing_error": processing_error,
         "created_at": datetime.utcnow().isoformat()
     }
 
@@ -179,8 +181,8 @@ async def upload_image(
             "message": "Image uploaded successfully",
             "data": added_item
         }
-    else:
-        raise HTTPException(status_code=500, detail="Failed to save item metadata")
+
+    raise HTTPException(status_code=500, detail="Failed to save item metadata")
 
 
 @router.post("/remove-background")
@@ -224,8 +226,10 @@ async def remove_background(
         global REMBG_SESSION
 
         if REMBG_SESSION is None:
+            from rembg import remove, new_session
             REMBG_SESSION = new_session()
 
+        from rembg import remove
         input_image = original_image.convert("RGB")
         result = remove(input_image, session=REMBG_SESSION)
 
