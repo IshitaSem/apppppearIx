@@ -7,6 +7,7 @@ from PIL import Image
 import io
 import logging
 from datetime import datetime
+import requests
 from database import db
 
 logger = logging.getLogger(__name__)
@@ -15,14 +16,10 @@ router = APIRouter(prefix="/upload", tags=["Upload"])
 
 UPLOAD_FOLDER = "uploads"
 UPLOAD_URL_PREFIX = "/uploads"
+MODAL_BG_URL = "https://ishitasem--bg-remove-fastapi-app.modal.run/remove-bg"
 
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
-
-# rembg disabled for Railway - too heavy
-REMBG_AVAILABLE = False
-REMBG_SESSION = None
-logger.warning("rembg disabled for production/Railway deployment")
 
 
 def get_dominant_color(image_path: str) -> str:
@@ -55,37 +52,6 @@ def get_dominant_color(image_path: str) -> str:
         return "unknown"
 
 
-def detect_clothing_type(filename: str) -> str:
-    name = filename.lower()
-
-    top_keywords = [
-        "shirt", "tshirt", "t-shirt", "top", "hoodie",
-        "sweater", "tee", "blouse", "kurti"
-    ]
-    bottom_keywords = [
-        "jeans", "pant", "pants", "trouser", "bottom",
-        "skirt", "shorts", "leggings"
-    ]
-    shoes_keywords = [
-        "shoe", "shoes", "sneaker", "heel", "heels",
-        "boot", "boots", "sandals"
-    ]
-
-    for word in top_keywords:
-        if word in name:
-            return "top"
-
-    for word in bottom_keywords:
-        if word in name:
-            return "bottom"
-
-    for word in shoes_keywords:
-        if word in name:
-            return "shoes"
-
-    return "unknown"
-
-
 def pick_uploaded_file(
     file: Optional[UploadFile],
     image: Optional[UploadFile],
@@ -97,6 +63,27 @@ def pick_uploaded_file(
             detail="No uploaded file found. Send multipart field 'file' or 'image'."
         )
     return uploaded
+
+
+def remove_bg_with_modal(image_bytes: bytes) -> tuple[bytes, bool, Optional[str]]:
+    try:
+        files = {
+            "file": ("image.png", image_bytes, "application/octet-stream")
+        }
+
+        response = requests.post(MODAL_BG_URL, files=files, timeout=120)
+
+        if response.status_code == 200 and response.content:
+            return response.content, True, None
+
+        logger.warning(
+            f"Modal BG remove failed with status {response.status_code}: {response.text}"
+        )
+        return image_bytes, False, f"Modal returned status {response.status_code}"
+
+    except Exception as e:
+        logger.warning(f"Modal BG remove error: {e}")
+        return image_bytes, False, str(e)
 
 
 @router.post("/")
@@ -138,13 +125,27 @@ async def upload_image(
         logger.error(f"Failed to save original image: {e}")
         raise HTTPException(status_code=500, detail="Failed to save image")
 
+    final_content = content
     final_filename = original_filename
     bg_removed = False
     processing_error = None
 
     if use_bg_removal:
-        processing_error = "Background removal disabled on this server"
-        logger.info("BG removal requested but disabled for Railway")
+        processed_bytes, bg_removed, processing_error = remove_bg_with_modal(content)
+
+        if bg_removed:
+            final_filename = f"{file_id}_bg_removed.png"
+            final_path = os.path.join(UPLOAD_FOLDER, final_filename)
+
+            try:
+                with open(final_path, "wb") as f:
+                    f.write(processed_bytes)
+                final_content = processed_bytes
+            except Exception as e:
+                logger.warning(f"Failed to save bg removed image: {e}")
+                final_filename = original_filename
+                bg_removed = False
+                processing_error = f"Failed to save processed image: {e}"
 
     final_image_path = os.path.join(UPLOAD_FOLDER, final_filename)
 
@@ -205,65 +206,24 @@ async def remove_background(
         logger.error(f"Invalid image file: {e}")
         raise HTTPException(status_code=400, detail="Invalid image file")
 
-    if not REMBG_AVAILABLE:
-        logger.warning("rembg not available, returning original image")
-        buffered = io.BytesIO()
-        original_image.save(buffered, format="PNG")
-        encoded_image = base64.b64encode(buffered.getvalue()).decode("utf-8")
-
-        return {
-            "success": False,
-            "message": "Background remover not installed, using original image",
-            "data": {
-                "image_base64": encoded_image,
-                "background_removed": False
-            },
-            "error": "rembg not available"
-        }
+    processed_bytes, bg_removed, processing_error = remove_bg_with_modal(content)
 
     try:
-        global REMBG_SESSION
+        result_image = Image.open(io.BytesIO(processed_bytes)).convert("RGBA")
+    except Exception:
+        result_image = original_image
+        bg_removed = False
 
-        if REMBG_SESSION is None:
-            from rembg import remove, new_session
-            REMBG_SESSION = new_session()
+    result_bytes = io.BytesIO()
+    result_image.save(result_bytes, format="PNG")
+    encoded_image = base64.b64encode(result_bytes.getvalue()).decode("utf-8")
 
-        from rembg import remove
-        input_image = original_image.convert("RGB")
-        result = remove(input_image, session=REMBG_SESSION)
-
-        if isinstance(result, Image.Image):
-            result_image = result.convert("RGBA")
-        else:
-            result_image = Image.open(io.BytesIO(result)).convert("RGBA")
-
-        result_bytes = io.BytesIO()
-        result_image.save(result_bytes, format="PNG")
-        encoded_image = base64.b64encode(result_bytes.getvalue()).decode("utf-8")
-
-        return {
-            "success": True,
-            "message": "Background removed successfully",
-            "data": {
-                "image_base64": encoded_image,
-                "background_removed": True
-            },
-            "error": None
-        }
-
-    except Exception as e:
-        logger.warning(f"BG removal failed, returning original image: {e}")
-
-        fallback_bytes = io.BytesIO()
-        original_image.save(fallback_bytes, format="PNG")
-        encoded_image = base64.b64encode(fallback_bytes.getvalue()).decode("utf-8")
-
-        return {
-            "success": True,
-            "message": "BG removal failed, using original image",
-            "data": {
-                "image_base64": encoded_image,
-                "background_removed": False
-            },
-            "error": str(e)
-        }
+    return {
+        "success": True,
+        "message": "Background removal processed",
+        "data": {
+            "image_base64": encoded_image,
+            "background_removed": bg_removed
+        },
+        "error": processing_error
+    }
