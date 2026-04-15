@@ -7,6 +7,9 @@ import os
 from datetime import datetime
 from typing import Optional
 import logging
+import os
+
+BASE_URL = os.getenv("BASE_URL", "http://192.168.1.3:8000")
 
 logger = logging.getLogger(__name__)
 
