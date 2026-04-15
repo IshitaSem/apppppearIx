@@ -3,17 +3,17 @@ from passlib.context import CryptContext
 from pydantic import BaseModel
 from jose import JWTError, jwt
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import uuid
 from datetime import datetime, timedelta
+import uuid
+import os
 
-users = []
+from database import users_collection, serialize_doc
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
-# Changed from bcrypt to pbkdf2_sha256 for better compatibility on Render
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
-SECRET_KEY = "super-secret-key"
+SECRET_KEY = os.getenv("SECRET_KEY", "super-secret-key")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -54,11 +54,21 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ):
     try:
-        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
+        payload = jwt.decode(
+            credentials.credentials,
+            SECRET_KEY,
+            algorithms=[ALGORITHM]
+        )
         user_id = payload.get("sub")
         if not user_id:
             raise HTTPException(status_code=401, detail="Invalid token")
+
+        user = users_collection.find_one({"id": user_id})
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+
         return user_id
+
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -71,9 +81,9 @@ def register(request: RegisterRequest):
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and password are required")
 
-    for user in users:
-        if user["email"] == email:
-            raise HTTPException(status_code=400, detail="User already exists")
+    existing_user = users_collection.find_one({"email": email})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="User already exists")
 
     try:
         hashed_password = hash_password(password)
@@ -87,7 +97,10 @@ def register(request: RegisterRequest):
         "created_at": datetime.utcnow().isoformat(),
     }
 
-    users.append(new_user)
+    try:
+        users_collection.insert_one(new_user)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save user: {str(e)}")
 
     return {
         "success": True,
@@ -107,39 +120,41 @@ def login(request: LoginRequest):
     if not email or not password:
         raise HTTPException(status_code=400, detail="Email and password are required")
 
-    for user in users:
-        if user["email"] == email:
-            try:
-                if not verify_password(password, user["password"]):
-                    raise HTTPException(status_code=400, detail="Wrong password")
-            except HTTPException:
-                raise
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Password verification failed: {str(e)}")
+    user = users_collection.find_one({"email": email})
+    if not user:
+        raise HTTPException(status_code=400, detail="User not found")
 
-            token = create_access_token({"sub": user["id"]})
+    try:
+        if not verify_password(password, user["password"]):
+            raise HTTPException(status_code=400, detail="Wrong password")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Password verification failed: {str(e)}")
 
-            return {
-                "success": True,
-                "message": "Login successful",
-                "data": {
-                    "access_token": token,
-                    "token_type": "bearer",
-                    "user_id": user["id"],
-                    "email": user["email"],
-                },
-            }
+    token = create_access_token({"sub": user["id"]})
 
-    raise HTTPException(status_code=400, detail="User not found")
+    return {
+        "success": True,
+        "message": "Login successful",
+        "data": {
+            "access_token": token,
+            "token_type": "bearer",
+            "user_id": user["id"],
+            "email": user["email"],
+        },
+    }
 
 
 @router.get("/me")
 def get_me(user_id: str = Depends(get_current_user)):
-    for user in users:
-        if user["id"] == user_id:
-            return {
-                "user_id": user["id"],
-                "email": user["email"],
-            }
+    user = users_collection.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
 
-    raise HTTPException(status_code=404, detail="User not found")
+    user = serialize_doc(user)
+
+    return {
+        "user_id": user["id"],
+        "email": user["email"],
+    }
