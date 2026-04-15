@@ -1,159 +1,145 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Form
-from database import feed, users
-from pydantic import BaseModel
-import uuid
-import os
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+from typing import List, Optional
 from datetime import datetime
-from typing import Optional
-import logging
+import uuid
+from database import db
 
-logger = logging.getLogger(__name__)
+router = APIRouter(prefix="/feed", tags=["Feed"])
 
-UPLOAD_FOLDER = "uploads"
-UPLOAD_URL_PREFIX = "/uploads"
 
-router = APIRouter(prefix="/feed", tags=["Global Feed"])
+class CreatePostRequest(BaseModel):
+    user_id: str
+    caption: Optional[str] = ""
+    image_url: Optional[str] = None
+    outfit_item_ids: List[str] = Field(default_factory=list)
 
-class LikeRequest(BaseModel):
+
+class PostActionRequest(BaseModel):
     user_id: str
 
-class PostResponse(BaseModel):
-    id: str
-    user_id: str
-    username: str
-    caption: str
-    image_url: str
-    created_at: str
-    likes_count: int
-    dislikes_count: int
-    likes_by: list[str]
-    dislikes_by: list[str]
 
 @router.post("/posts")
-async def create_post(
-    user_id: str = Form(...),
-    caption: str = Form(...),
-    image: UploadFile = File(...)
-):
-    if not image.filename:
-        raise HTTPException(status_code=400, detail="No image provided")
+def create_post(request: CreatePostRequest):
+    try:
+        post = {
+            "id": str(uuid.uuid4()),
+            "user_id": request.user_id,
+            "caption": request.caption or "",
+            "image_url": request.image_url,
+            "outfit_item_ids": request.outfit_item_ids,
+            "likes_by": [],
+            "dislikes_by": [],
+            "saved_by": [],
+            "likes_count": 0,
+            "dislikes_count": 0,
+            "created_at": datetime.utcnow().isoformat(),
+        }
 
-    allowed_ext = {"jpg", "jpeg", "png", "webp", "gif"}
-    file_ext = image.filename.split(".")[-1].lower()
-    if file_ext not in allowed_ext:
-        raise HTTPException(status_code=400, detail=f"Invalid file type: {file_ext}")
+        saved_post = db.create_post(post)
+        if not saved_post:
+            raise HTTPException(status_code=500, detail="Failed to create post")
 
-    file_id = str(uuid.uuid4())
-    original_filename = f"post_{file_id}.{file_ext}"
-    original_path = os.path.join(UPLOAD_FOLDER, original_filename)
+        return {
+            "success": True,
+            "message": "Post created successfully",
+            "data": saved_post
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating post: {str(e)}")
 
-    content = await image.read()
-    with open(original_path, "wb") as f:
-        f.write(content)
-
-    # Find username
-    username = "Anonymous"
-    for u in users:
-        if u["id"] == user_id:
-            username = u["email"].split("@")[0].capitalize()  # simple username
-            break
-
-    post = {
-        "id": file_id,
-        "user_id": user_id,
-        "username": username,
-        "caption": caption,
-        "image_url": f"{UPLOAD_URL_PREFIX}/{original_filename}",
-        "created_at": datetime.utcnow().isoformat(),
-        "likes_count": 0,
-        "dislikes_count": 0,
-        "likes_by": [],
-        "dislikes_by": [],
-        "saved_by": []
-    }
-
-    feed.append(post)
-    logger.info(f"Created post {file_id} by {user_id}")
-
-    return {
-        "success": True,
-        "message": "Post created successfully",
-        "post": post
-    }
 
 @router.get("/posts")
 def get_posts(user_id: Optional[str] = None):
-    result = []
-    for post in feed:
-        p = post.copy()
-        if user_id:
-            p["is_liked_by_current_user"] = user_id in post.get("likes_by", [])
-            p["is_disliked_by_current_user"] = user_id in post.get("dislikes_by", [])
-            p["is_saved_by_current_user"] = user_id in post.get("saved_by", [])
-        result.append(p)
-    return {"feed": result}
+    try:
+        posts = db.get_posts(user_id)
+        return {
+            "success": True,
+            "message": "Posts retrieved successfully",
+            "data": posts
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving posts: {str(e)}")
+
 
 @router.post("/posts/{post_id}/like")
-def toggle_like(post_id: str, request: LikeRequest):
-    post = next((p for p in feed if p["id"] == post_id), None)
-    if not post:
-        raise HTTPException(status_code=404, detail="Post not found")
+def like_post(post_id: str, request: PostActionRequest):
+    try:
+        ok = db.update_post_interaction(post_id, request.user_id, "like")
+        if not ok:
+            raise HTTPException(status_code=500, detail="Failed to like post")
 
-    if request.user_id in post["likes_by"]:
-        post["likes_by"].remove(request.user_id)
-        post["likes_count"] -= 1
-    else:
-        # unlike dislike if active
-        if request.user_id in post["dislikes_by"]:
-            post["dislikes_by"].remove(request.user_id)
-            post["dislikes_count"] -= 1
-        post["likes_by"].append(request.user_id)
-        post["likes_count"] += 1
+        return {
+            "success": True,
+            "message": "Post liked successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error liking post: {str(e)}")
 
-    return {"success": True, "post": post}
 
 @router.post("/posts/{post_id}/dislike")
-def toggle_dislike(post_id: str, request: LikeRequest):
-    post = next((p for p in feed if p["id"] == post_id), None)
-    if not post:
-        raise HTTPException(status_code=404, detail="Post not found")
+def dislike_post(post_id: str, request: PostActionRequest):
+    try:
+        ok = db.update_post_interaction(post_id, request.user_id, "dislike")
+        if not ok:
+            raise HTTPException(status_code=500, detail="Failed to dislike post")
 
-    if request.user_id in post["dislikes_by"]:
-        post["dislikes_by"].remove(request.user_id)
-        post["dislikes_count"] -= 1
-    else:
-        # unlike like if active
-        if request.user_id in post["likes_by"]:
-            post["likes_by"].remove(request.user_id)
-            post["likes_count"] -= 1
-        post["dislikes_by"].append(request.user_id)
-        post["dislikes_count"] += 1
+        return {
+            "success": True,
+            "message": "Post disliked successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error disliking post: {str(e)}")
 
-    return {"success": True, "post": post}
 
 @router.post("/posts/{post_id}/save")
-def toggle_save(post_id: str, request: LikeRequest):
-    post = next((p for p in feed if p["id"] == post_id), None)
-    if not post:
-        raise HTTPException(status_code=404, detail="Post not found")
+def save_post(post_id: str, request: PostActionRequest):
+    try:
+        ok = db.update_post_interaction(post_id, request.user_id, "save")
+        if not ok:
+            raise HTTPException(status_code=500, detail="Failed to save post")
 
-    post["saved_by"] = post.get("saved_by", [])
-    
-    if request.user_id in post["saved_by"]:
-        post["saved_by"].remove(request.user_id)
-    else:
-        post["saved_by"].append(request.user_id)
+        return {
+            "success": True,
+            "message": "Post saved successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving post: {str(e)}")
 
-    return {"success": True, "post": post}
+
+@router.post("/posts/{post_id}/unsave")
+def unsave_post(post_id: str, request: PostActionRequest):
+    try:
+        ok = db.update_post_interaction(post_id, request.user_id, "unsave")
+        if not ok:
+            raise HTTPException(status_code=500, detail="Failed to unsave post")
+
+        return {
+            "success": True,
+            "message": "Post unsaved successfully"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error unsaving post: {str(e)}")
+
 
 @router.get("/saved/{user_id}")
-def get_saved(user_id: str):
-    saved = [p for p in feed if user_id in p.get("saved_by", [])]
-    result = []
-    for post in saved:
-        p = post.copy()
-        p["is_liked_by_current_user"] = user_id in p.get("likes_by", [])
-        p["is_disliked_by_current_user"] = user_id in p.get("dislikes_by", [])
-        p["is_saved_by_current_user"] = True
-        result.append(p)
-    return {"saved": result}
+def get_saved_posts(user_id: str):
+    try:
+        posts = db.get_saved_posts(user_id)
+        return {
+            "success": True,
+            "message": "Saved posts retrieved successfully",
+            "data": posts
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error retrieving saved posts: {str(e)}")
