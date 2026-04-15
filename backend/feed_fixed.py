@@ -11,8 +11,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 UPLOAD_FOLDER = "uploads"
-UPLOAD_URL_PREFIX = "/uploads"
-
+"image_url": f"{UPLOAD_URL_PREFIX}/{original_filename}",
 router = APIRouter(prefix="/feed", tags=["Global Feed"])
 
 class LikeRequest(BaseModel):
