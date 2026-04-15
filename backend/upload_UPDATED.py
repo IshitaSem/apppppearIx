@@ -12,7 +12,9 @@ from database import wardrobe_collection
 router = APIRouter(prefix="/upload", tags=["Upload"])
 
 UPLOAD_FOLDER = "uploads"
-UPLOAD_URL_PREFIX = "/uploads"  # URL prefix for served uploads
+BASE_URL = os.getenv("BASE_URL", "http://192.168.1.3:8000")  # URL prefix for served uploads
+"image_url": f"{BASE_URL}/uploads/{final_filename}",
+"original_image_url": f"{BASE_URL}/uploads/{original_filename}",
 
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
