@@ -1,20 +1,24 @@
 from fastapi import APIRouter, HTTPException, Depends
-from passlib.context import CryptContext
-from pydantic import BaseModel
-from jose import JWTError, jwt
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from pydantic import BaseModel, EmailStr
+from passlib.context import CryptContext
+from jose import JWTError, jwt
 import uuid
 from datetime import datetime, timedelta
-from database import db
-import logging
+import hashlib
 
-logger = logging.getLogger(__name__)
+users = []
 
 router = APIRouter(prefix="/auth", tags=["Auth"])
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Keep bcrypt only for verifying old hashes if any exist.
+# New passwords will use pbkdf2_sha256, which avoids the bcrypt 72-byte issue.
+pwd_context = CryptContext(
+    schemes=["pbkdf2_sha256", "bcrypt"],
+    deprecated="auto"
+)
 
-SECRET_KEY = "09d25e094faa6ca2556c818166b9tnv9b929c09774b2e2b"  # Change in production
+SECRET_KEY = "super-secret-key"
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
@@ -22,12 +26,15 @@ security = HTTPBearer()
 
 
 class RegisterRequest(BaseModel):
-    email: str
+    name: str | None = None
+    email: EmailStr
+    phone: str | None = None
     password: str
+    confirm_password: str | None = None
 
 
 class LoginRequest(BaseModel):
-    email: str
+    email: EmailStr
     password: str
 
 
@@ -36,12 +43,22 @@ class Token(BaseModel):
     token_type: str
 
 
-def hash_password(password: str):
-    return pwd_context.hash(password)
+def normalize_password(password: str) -> str:
+    """
+    Pre-hash the raw password so long passwords are handled safely and consistently.
+    This avoids bcrypt's 72-byte limit and works fine with pbkdf2_sha256 too.
+    """
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
-def verify_password(plain_password, hashed_password):
-    return pwd_context.verify(plain_password, hashed_password)
+def hash_password(password: str) -> str:
+    normalized = normalize_password(password)
+    return pwd_context.hash(normalized)
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    normalized = normalize_password(plain_password)
+    return pwd_context.verify(normalized, hashed_password)
 
 
 def create_access_token(data: dict):
@@ -52,69 +69,89 @@ def create_access_token(data: dict):
 
 
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    token = credentials.credentials
     try:
-        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id = payload.get("sub")
-        user = db.get_user_by_id(user_id)
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid token")
+
+        user = next((u for u in users if u["id"] == user_id), None)
         if not user:
-            raise HTTPException(status_code=404, detail="User not found")
-        return user["id"]
+            raise HTTPException(status_code=401, detail="User not found")
+
+        return user
     except JWTError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
 
 @router.post("/register")
 def register(request: RegisterRequest):
-    if db.get_user_by_email(request.email):
-        raise HTTPException(status_code=400, detail="User already exists")
+    existing_user = next((u for u in users if u["email"].lower() == request.email.lower()), None)
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Email already registered")
+
+    if not request.password or len(request.password.strip()) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters long")
+
+    if request.confirm_password is not None and request.password != request.confirm_password:
+        raise HTTPException(status_code=400, detail="Passwords do not match")
 
     new_user = {
         "id": str(uuid.uuid4()),
+        "name": request.name,
         "email": request.email.lower(),
+        "phone": request.phone,
         "password": hash_password(request.password),
         "created_at": datetime.utcnow().isoformat()
     }
 
-    if not db.create_user(new_user):
-        raise HTTPException(status_code=500, detail="Failed to create user")
+    users.append(new_user)
+
+    access_token = create_access_token({"sub": new_user["id"]})
 
     return {
-        "success": True,
         "message": "User registered successfully",
-        "data": {
-            "user_id": new_user["id"],
-            "email": new_user["email"]
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": new_user["id"],
+            "name": new_user["name"],
+            "email": new_user["email"],
+            "phone": new_user["phone"]
         }
     }
 
 
 @router.post("/login")
 def login(request: LoginRequest):
-    user = db.get_user_by_email(request.email)
-    if not user or not verify_password(request.password, user["password"]):
-        raise HTTPException(status_code=400, detail="Invalid email or password")
+    user = next((u for u in users if u["email"].lower() == request.email.lower()), None)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid email or password")
 
-    token = create_access_token({"sub": user["id"]})
+    if not verify_password(request.password, user["password"]):
+        raise HTTPException(status_code=401, detail="Invalid email or password")
+
+    access_token = create_access_token({"sub": user["id"]})
 
     return {
-        "success": True,
         "message": "Login successful",
-        "data": {
-            "access_token": token,
-            "token_type": "bearer",
-            "user_id": user["id"],
-            "email": user["email"]
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user["id"],
+            "name": user.get("name"),
+            "email": user["email"],
+            "phone": user.get("phone")
         }
     }
 
 
 @router.get("/me")
-def get_me(user_id: str = Depends(get_current_user)):
-    user = db.get_user_by_id(user_id)
-    if user:
-        return {
-            "user_id": user["id"],
-            "email": user["email"]
-        }
-    raise HTTPException(status_code=404, detail="User not found")
-
+def me(current_user: dict = Depends(get_current_user)):
+    return {
+        "id": current_user["id"],
+        "name": current_user.get("name"),
+        "email": current_user["email"],
+        "phone": current_user.get("phone")
+    }
