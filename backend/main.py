@@ -21,17 +21,16 @@ app = FastAPI(
     description="Backend API for Appearix - Smart Wardrobe Styling"
 )
 
-# =========================
-# CORS CONFIG
-# =========================
-# For public demo:
-# add your real frontend URLs here.
-# You can also set FRONTEND_URLS in Render environment variables like:
-# https://appearix-frontend.web.app,https://appearix-frontend.firebaseapp.com
-
 frontend_urls_env = os.getenv(
     "FRONTEND_URLS",
-    "http://localhost:3000,http://127.0.0.1:3000,http://localhost:5000,http://127.0.0.1:5000,https://appearix-frontend.web.app,https://appearix-frontend.firebaseapp.com"
+    "http://localhost:3000,"
+    "http://127.0.0.1:3000,"
+    "http://localhost:5000,"
+    "http://127.0.0.1:5000,"
+    "http://localhost:8000,"
+    "http://127.0.0.1:8000,"
+    "https://appearix-frontend.web.app,"
+    "https://appearix-frontend.firebaseapp.com"
 )
 
 allowed_origins = [url.strip() for url in frontend_urls_env.split(",") if url.strip()]
@@ -44,16 +43,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# =========================
-# STATIC FILES
-# =========================
 os.makedirs("uploads", exist_ok=True)
 app.mount("/uploads", StaticFiles(directory="uploads"), name="uploads")
 
 
-# =========================
-# STARTUP
-# =========================
 @app.on_event("startup")
 def startup_event():
     print("Starting Appearix backend...")
@@ -65,9 +58,6 @@ def startup_event():
         print("MongoDB startup failed:", str(e))
 
 
-# =========================
-# BASIC ROUTES
-# =========================
 @app.get("/")
 def home():
     return {
@@ -95,9 +85,6 @@ def test_db():
         }
 
 
-# =========================
-# ROUTERS
-# =========================
 app.include_router(upload_router)
 app.include_router(auth_router)
 app.include_router(wardrobe_router)
@@ -108,9 +95,6 @@ app.include_router(feed_router)
 app.include_router(fashion_tools_router)
 
 
-# =========================
-# LOCAL RUN
-# =========================
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
