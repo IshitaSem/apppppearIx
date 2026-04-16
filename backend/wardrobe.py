@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
@@ -111,6 +111,11 @@ def normalize_category(category: str) -> str:
     return CATEGORY_MAP.get(c, c)
 
 
+def normalize_item(item: dict) -> dict:
+    item["category"] = normalize_category(item.get("category", ""))
+    return item
+
+
 class AddItemRequest(BaseModel):
     user_id: str
     name: str
@@ -163,7 +168,7 @@ def add_item(request: AddItemRequest):
     if not saved_item:
         raise HTTPException(status_code=500, detail="Failed to add item")
 
-    saved_item["category"] = normalize_category(saved_item.get("category", ""))
+    saved_item = normalize_item(saved_item)
 
     return {
         "message": "Item added successfully",
@@ -171,12 +176,11 @@ def add_item(request: AddItemRequest):
     }
 
 
-@router.get("/all/{user_id}")
-def get_all_items(user_id: str):
+# Supports frontend call: /wardrobe/all?user_id=...
+@router.get("/all")
+def get_all_items_query(user_id: str = Query(...)):
     items = db.get_user_items(user_id)
-
-    for item in items:
-        item["category"] = normalize_category(item.get("category", ""))
+    items = [normalize_item(item) for item in items]
 
     return {
         "count": len(items),
@@ -184,16 +188,50 @@ def get_all_items(user_id: str):
     }
 
 
-@router.get("/category/{user_id}/{category}")
-def get_items_by_category(user_id: str, category: str):
+# Supports old style call: /wardrobe/all/{user_id}
+@router.get("/all/{user_id}")
+def get_all_items_path(user_id: str):
+    items = db.get_user_items(user_id)
+    items = [normalize_item(item) for item in items]
+
+    return {
+        "count": len(items),
+        "items": items,
+    }
+
+
+# Supports frontend call: /wardrobe/category?user_id=...&category=...
+@router.get("/category")
+def get_items_by_category_query(
+    user_id: str = Query(...),
+    category: str = Query(...)
+):
     normalized_category = normalize_category(category)
     items = db.get_user_items(user_id)
 
     filtered_items = []
     for item in items:
-        item_category = normalize_category(item.get("category", ""))
-        if item_category == normalized_category:
-            item["category"] = item_category
+        item = normalize_item(item)
+        if item["category"] == normalized_category:
+            filtered_items.append(item)
+
+    return {
+        "category": normalized_category,
+        "count": len(filtered_items),
+        "items": filtered_items,
+    }
+
+
+# Supports old style call: /wardrobe/category/{user_id}/{category}
+@router.get("/category/{user_id}/{category}")
+def get_items_by_category_path(user_id: str, category: str):
+    normalized_category = normalize_category(category)
+    items = db.get_user_items(user_id)
+
+    filtered_items = []
+    for item in items:
+        item = normalize_item(item)
+        if item["category"] == normalized_category:
             filtered_items.append(item)
 
     return {
@@ -210,8 +248,7 @@ def get_item(item_id: str):
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
 
-    item["category"] = normalize_category(item.get("category", ""))
-    return item
+    return normalize_item(item)
 
 
 @router.put("/update/{item_id}")
@@ -247,11 +284,12 @@ def update_item(item_id: str, request: UpdateItemRequest):
 
     if not updates:
         updated_item = db.get_item(item_id)
-        if updated_item:
-            updated_item["category"] = normalize_category(updated_item.get("category", ""))
+        if not updated_item:
+            raise HTTPException(status_code=404, detail="Item not found")
+
         return {
             "message": "No changes provided",
-            "item": updated_item,
+            "item": normalize_item(updated_item),
         }
 
     success = db.update_item(item_id, updates)
@@ -262,11 +300,9 @@ def update_item(item_id: str, request: UpdateItemRequest):
     if not updated_item:
         raise HTTPException(status_code=404, detail="Updated item not found")
 
-    updated_item["category"] = normalize_category(updated_item.get("category", ""))
-
     return {
         "message": "Item updated successfully",
-        "item": updated_item,
+        "item": normalize_item(updated_item),
     }
 
 
@@ -280,9 +316,7 @@ def delete_item(item_id: str):
     if not success:
         raise HTTPException(status_code=500, detail="Failed to delete item")
 
-    existing_item["category"] = normalize_category(existing_item.get("category", ""))
-
     return {
         "message": "Item deleted successfully",
-        "item": existing_item,
+        "item": normalize_item(existing_item),
     }
