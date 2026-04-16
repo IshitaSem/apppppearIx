@@ -1,5 +1,5 @@
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException
-from typing import Optional
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Request
+from typing import Optional, Tuple
 import uuid
 import os
 import base64
@@ -8,18 +8,27 @@ import io
 import logging
 from datetime import datetime
 import requests
+
 from database import db
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/upload", tags=["Upload"])
 
-UPLOAD_FOLDER = "uploads"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+UPLOAD_FOLDER = os.path.join(BASE_DIR, "uploads")
 UPLOAD_URL_PREFIX = "/uploads"
 MODAL_BG_URL = "https://ishitasem--bg-remove-fastapi-app.modal.run/remove-bg"
 
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+
+
+def build_absolute_url(request: Request, relative_path: str) -> str:
+    if not relative_path:
+        return ""
+    if relative_path.startswith("http://") or relative_path.startswith("https://"):
+        return relative_path
+    return str(request.base_url).rstrip("/") + relative_path
 
 
 def get_dominant_color(image_path: str) -> str:
@@ -65,7 +74,7 @@ def pick_uploaded_file(
     return uploaded
 
 
-def remove_bg_with_modal(image_bytes: bytes) -> tuple[bytes, bool, Optional[str]]:
+def remove_bg_with_modal(image_bytes: bytes) -> Tuple[bytes, bool, Optional[str]]:
     try:
         files = {
             "file": ("image.png", image_bytes, "application/octet-stream")
@@ -86,8 +95,24 @@ def remove_bg_with_modal(image_bytes: bytes) -> tuple[bytes, bool, Optional[str]
         return image_bytes, False, str(e)
 
 
+def serialize_item_for_response(item: dict, request: Request) -> dict:
+    response_item = dict(item)
+
+    image_url = response_item.get("image_url", "")
+    original_image_url = response_item.get("original_image_url", "")
+
+    if image_url:
+        response_item["image_url"] = build_absolute_url(request, image_url)
+
+    if original_image_url:
+        response_item["original_image_url"] = build_absolute_url(request, original_image_url)
+
+    return response_item
+
+
 @router.post("/")
 async def upload_image(
+    request: Request,
     user_id: str = Form(...),
     use_bg_removal: bool = Form(False),
     item_name: str = Form(...),
@@ -101,7 +126,11 @@ async def upload_image(
         raise HTTPException(status_code=400, detail="No file uploaded")
 
     allowed_extensions = {"jpg", "jpeg", "png", "gif", "webp"}
-    file_ext = uploaded_file.filename.split(".")[-1].lower()
+    parts = uploaded_file.filename.rsplit(".", 1)
+    if len(parts) != 2:
+        raise HTTPException(status_code=400, detail="Uploaded file has no valid extension")
+
+    file_ext = parts[-1].lower()
 
     if file_ext not in allowed_extensions:
         raise HTTPException(
@@ -121,11 +150,11 @@ async def upload_image(
     try:
         with open(original_path, "wb") as f:
             f.write(content)
+        logger.info(f"Saved original image: {original_path}")
     except Exception as e:
         logger.error(f"Failed to save original image: {e}")
         raise HTTPException(status_code=500, detail="Failed to save image")
 
-    final_content = content
     final_filename = original_filename
     bg_removed = False
     processing_error = None
@@ -140,7 +169,7 @@ async def upload_image(
             try:
                 with open(final_path, "wb") as f:
                     f.write(processed_bytes)
-                final_content = processed_bytes
+                logger.info(f"Saved background removed image: {final_path}")
             except Exception as e:
                 logger.warning(f"Failed to save bg removed image: {e}")
                 final_filename = original_filename
@@ -149,16 +178,15 @@ async def upload_image(
 
     final_image_path = os.path.join(UPLOAD_FOLDER, final_filename)
 
-    from wardrobe import CATEGORY_MAP
-    raw_category = category.strip().lower()
+    from wardrobe import normalize_category
 
     try:
         detected_color = get_dominant_color(final_image_path)
-        normalized_category = CATEGORY_MAP.get(raw_category, raw_category)
+        normalized_category = normalize_category(category)
     except Exception as e:
         logger.warning(f"Attribute detection failed: {e}")
         detected_color = "unknown"
-        normalized_category = raw_category
+        normalized_category = normalize_category(category)
 
     item = {
         "id": file_id,
@@ -171,18 +199,33 @@ async def upload_image(
         "original_image_url": f"{UPLOAD_URL_PREFIX}/{original_filename}",
         "background_removed": bg_removed,
         "processing_error": processing_error,
-        "created_at": datetime.utcnow().isoformat()
+        "created_at": datetime.utcnow().isoformat(),
     }
 
     added_item = db.add_item(item)
-    if added_item:
-        return {
-            "success": True,
-            "message": "Image uploaded successfully",
-            "data": added_item
-        }
+    if not added_item:
+        raise HTTPException(status_code=500, detail="Failed to save item metadata")
 
-    raise HTTPException(status_code=500, detail="Failed to save item metadata")
+    response_item = serialize_item_for_response(added_item, request)
+
+    # Return both legacy-friendly and frontend-friendly structure
+    return {
+        "success": True,
+        "message": "Image uploaded successfully",
+        "data": response_item,
+        "item": response_item,
+        "id": response_item.get("id"),
+        "user_id": response_item.get("user_id"),
+        "name": response_item.get("name"),
+        "category": response_item.get("category"),
+        "color": response_item.get("color"),
+        "image_path": response_item.get("image_path"),
+        "image_url": response_item.get("image_url"),
+        "original_image_url": response_item.get("original_image_url"),
+        "background_removed": response_item.get("background_removed"),
+        "processing_error": response_item.get("processing_error"),
+        "created_at": response_item.get("created_at"),
+    }
 
 
 @router.post("/remove-background")
@@ -223,7 +266,9 @@ async def remove_background(
         "message": "Background removal processed",
         "data": {
             "image_base64": encoded_image,
-            "background_removed": bg_removed
+            "background_removed": bg_removed,
         },
-        "error": processing_error
+        "image_base64": encoded_image,
+        "background_removed": bg_removed,
+        "error": processing_error,
     }
