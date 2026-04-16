@@ -40,8 +40,11 @@ class PostResponse(BaseModel):
 def serialize_doc(doc):
     if not doc:
         return None
-    doc["_id"] = str(doc["_id"])
-    return doc
+
+    serialized = dict(doc)
+    if "_id" in serialized:
+        serialized["_id"] = str(serialized["_id"])
+    return serialized
 
 
 def serialize_list(cursor):
@@ -85,6 +88,7 @@ async def create_post(
         "username": username,
         "caption": caption,
         "image_url": f"{UPLOAD_URL_PREFIX}/{filename}",
+        "image_path": filename,
         "created_at": datetime.utcnow().isoformat(),
         "likes_count": 0,
         "dislikes_count": 0,
@@ -102,14 +106,14 @@ async def create_post(
     return {
         "success": True,
         "message": "Post created successfully",
-        "post": created_post,
+        "post": serialize_doc(created_post),
     }
 
 
 @router.get("/posts")
 def get_posts(user_id: Optional[str] = None):
     posts = db.get_posts(user_id=user_id)
-    return {"feed": posts}
+    return {"feed": serialize_list(posts)}
 
 
 @router.post("/posts/{post_id}/like")
@@ -133,7 +137,7 @@ def toggle_like(post_id: str, request: LikeRequest):
         raise HTTPException(status_code=500, detail="Failed to update like")
 
     updated_post = db.get_post_by_id(post_id)
-    return {"success": True, "post": updated_post}
+    return {"success": True, "post": serialize_doc(updated_post)}
 
 
 @router.post("/posts/{post_id}/dislike")
@@ -157,7 +161,7 @@ def toggle_dislike(post_id: str, request: LikeRequest):
         raise HTTPException(status_code=500, detail="Failed to update dislike")
 
     updated_post = db.get_post_by_id(post_id)
-    return {"success": True, "post": updated_post}
+    return {"success": True, "post": serialize_doc(updated_post)}
 
 
 @router.post("/posts/{post_id}/save")
@@ -176,14 +180,17 @@ def toggle_save(post_id: str, request: LikeRequest):
         raise HTTPException(status_code=500, detail="Failed to update save")
 
     updated_post = db.get_post_by_id(post_id)
-    return {"success": True, "post": updated_post}
+    return {"success": True, "post": serialize_doc(updated_post)}
 
 
 @router.get("/saved/{user_id}")
 def get_saved(user_id: str):
     saved = db.get_saved_posts(user_id)
-    for p in saved:
-        p["is_liked_by_current_user"] = user_id in p.get("likes_by", [])
-        p["is_disliked_by_current_user"] = user_id in p.get("dislikes_by", [])
-        p["is_saved_by_current_user"] = True
-    return {"saved": saved}
+    serialized_saved = serialize_list(saved)
+
+    for post in serialized_saved:
+        post["is_liked_by_current_user"] = user_id in post.get("likes_by", [])
+        post["is_disliked_by_current_user"] = user_id in post.get("dislikes_by", [])
+        post["is_saved_by_current_user"] = True
+
+    return {"saved": serialized_saved}
