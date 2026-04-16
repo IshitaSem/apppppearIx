@@ -29,6 +29,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 UPLOADS_DIR = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 
+logger.info(f"Static uploads directory: {UPLOADS_DIR}")
+
 app.mount("/uploads", StaticFiles(directory=UPLOADS_DIR), name="uploads")
 
 
@@ -39,25 +41,18 @@ async def startup_event():
     logger.info(f"UPLOADS_DIR: {UPLOADS_DIR}")
     logger.info(f"Uploads directory exists: {os.path.exists(UPLOADS_DIR)}")
 
-    try:
-        files = os.listdir(UPLOADS_DIR)
-        logger.info(f"Uploads file count: {len(files)}")
-        logger.info(f"Uploads sample files: {files[:10]}")
-    except Exception as e:
-        logger.warning(f"Could not inspect uploads folder: {e}")
-
 
 @app.get("/")
 def home():
     return {
         "message": "Appearix Backend is running",
         "uploads_url": "/uploads",
-        "uploads_dir": UPLOADS_DIR,
     }
 
 
 @app.get("/health")
 def health():
+    files = []
     try:
         files = os.listdir(UPLOADS_DIR)
     except Exception:
@@ -68,6 +63,7 @@ def health():
         "uploads_dir": UPLOADS_DIR,
         "uploads_exists": os.path.exists(UPLOADS_DIR),
         "uploads_file_count": len(files),
+        "uploads_files": files[:20],
     }
 
 
