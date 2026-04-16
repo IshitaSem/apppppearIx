@@ -110,8 +110,7 @@ def get_public_base_url(request: Request) -> str:
     env_url = os.getenv("BACKEND_PUBLIC_BASE_URL", "").strip()
     if env_url:
         return env_url.rstrip("/")
-    return str(request.base_url).rstrip("/)
-
+return str(request.base_url).rstrip("/")
 
 def normalize_item(item: dict, request: Optional[Request] = None) -> dict:
     normalized = dict(item)
