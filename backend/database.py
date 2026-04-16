@@ -1,7 +1,7 @@
 import os
 import logging
 from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 
 import pymongo
 from pymongo.errors import ConnectionFailure, PyMongoError
@@ -10,6 +10,22 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+def _serialize_doc(doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not doc:
+        return None
+
+    serialized = dict(doc)
+
+    if "_id" in serialized:
+        serialized["_id"] = str(serialized["_id"])
+
+    return serialized
+
+
+def _serialize_list(docs: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [_serialize_doc(doc) for doc in docs if doc is not None]
 
 
 class Database:
@@ -21,7 +37,7 @@ class Database:
         try:
             self._client = pymongo.MongoClient(self.mongo_url)
 
-            # ✅ FIXED DATABASE NAME (IMPORTANT)
+            # Use the correct MongoDB database
             self._db = self._client["appearix_db"]
 
             # Test connection
@@ -61,11 +77,12 @@ class Database:
 
     def get_user_items(self, user_id: str) -> List[Dict]:
         try:
-            return list(
+            items = list(
                 self.wardrobe_collection.find({"user_id": user_id}).sort(
                     "created_at", -1
                 )
             )
+            return _serialize_list(items)
         except PyMongoError as e:
             logger.error(f"Error fetching user items: {e}")
             return []
@@ -82,7 +99,8 @@ class Database:
 
     def get_item(self, item_id: str) -> Optional[Dict]:
         try:
-            return self.wardrobe_collection.find_one({"id": item_id})
+            item = self.wardrobe_collection.find_one({"id": item_id})
+            return _serialize_doc(item)
         except PyMongoError as e:
             logger.error(f"Error getting item {item_id}: {e}")
             return None
@@ -122,14 +140,16 @@ class Database:
 
     def get_user_by_email(self, email: str) -> Optional[Dict]:
         try:
-            return self.users_collection.find_one({"email": email.lower()})
+            user = self.users_collection.find_one({"email": email.lower()})
+            return _serialize_doc(user)
         except PyMongoError as e:
             logger.error(f"Error getting user by email: {e}")
             return None
 
     def get_user_by_id(self, user_id: str) -> Optional[Dict]:
         try:
-            return self.users_collection.find_one({"id": user_id})
+            user = self.users_collection.find_one({"id": user_id})
+            return _serialize_doc(user)
         except PyMongoError as e:
             logger.error(f"Error getting user by id: {e}")
             return None
@@ -148,11 +168,12 @@ class Database:
 
     def get_user_outfits(self, user_id: str) -> List[Dict]:
         try:
-            return list(
+            outfits = list(
                 self.outfits_collection.find({"user_id": user_id}).sort(
                     "created_at", -1
                 )
             )
+            return _serialize_list(outfits)
         except PyMongoError as e:
             logger.error(f"Error getting user outfits: {e}")
             return []
@@ -171,11 +192,12 @@ class Database:
 
     def get_user_plans(self, user_id: str) -> List[Dict]:
         try:
-            return list(
+            plans = list(
                 self.planner_collection.find({"user_id": user_id}).sort(
                     "created_at", -1
                 )
             )
+            return _serialize_list(plans)
         except PyMongoError as e:
             logger.error(f"Error getting user plans: {e}")
             return []
@@ -219,7 +241,8 @@ class Database:
                     }
                 )
 
-            return list(self.feed_collection.aggregate(pipeline))
+            posts = list(self.feed_collection.aggregate(pipeline))
+            return _serialize_list(posts)
         except PyMongoError as e:
             logger.error(f"Error getting posts: {e}")
             return []
@@ -284,22 +307,24 @@ class Database:
 
     def get_saved_posts(self, user_id: str) -> List[Dict]:
         try:
-            return list(
+            saved_posts = list(
                 self.feed_collection.find({"saved_by": user_id}).sort(
                     "created_at", -1
                 )
             )
+            return _serialize_list(saved_posts)
         except PyMongoError as e:
             logger.error(f"Error getting saved posts: {e}")
             return []
 
     def get_post_by_id(self, post_id: str) -> Optional[Dict]:
         try:
-            return self.feed_collection.find_one({"id": post_id})
+            post = self.feed_collection.find_one({"id": post_id})
+            return _serialize_doc(post)
         except PyMongoError as e:
             logger.error(f"Error getting post by id {post_id}: {e}")
             return None
 
 
-# 🔥 GLOBAL INSTANCE
+# GLOBAL INSTANCE
 db = Database()
