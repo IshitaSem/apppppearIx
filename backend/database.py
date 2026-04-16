@@ -20,16 +20,22 @@ class Database:
 
         try:
             self._client = pymongo.MongoClient(self.mongo_url)
-            self._db = self._client["appearix"]
 
+            # ✅ FIXED DATABASE NAME (IMPORTANT)
+            self._db = self._client["appearix_db"]
+
+            # Test connection
             self._client.admin.command("ping")
-            logger.info("MongoDB connected successfully")
+            logger.info("MongoDB connected successfully to appearix_db")
+
         except ConnectionFailure:
             logger.error("MongoDB connection failed")
             raise
         except Exception as e:
             logger.error(f"MongoDB init error: {e}")
             raise
+
+    # ================= COLLECTIONS =================
 
     @property
     def wardrobe_collection(self):
@@ -50,6 +56,8 @@ class Database:
     @property
     def feed_collection(self):
         return self._db["feed"]
+
+    # ================= WARDROBE =================
 
     def get_user_items(self, user_id: str) -> List[Dict]:
         try:
@@ -99,6 +107,8 @@ class Database:
             logger.error(f"Error deleting item {item_id}: {e}")
             return False
 
+    # ================= USERS =================
+
     def create_user(self, user: Dict) -> Optional[Dict]:
         try:
             user["email"] = user.get("email", "").lower()
@@ -124,6 +134,8 @@ class Database:
             logger.error(f"Error getting user by id: {e}")
             return None
 
+    # ================= OUTFITS =================
+
     def save_outfit(self, outfit: Dict) -> Optional[Dict]:
         try:
             outfit["created_at"] = outfit.get("created_at", datetime.utcnow())
@@ -145,6 +157,8 @@ class Database:
             logger.error(f"Error getting user outfits: {e}")
             return []
 
+    # ================= PLANNER =================
+
     def save_plan(self, plan: Dict) -> Optional[Dict]:
         try:
             plan["created_at"] = plan.get("created_at", datetime.utcnow())
@@ -165,6 +179,8 @@ class Database:
         except PyMongoError as e:
             logger.error(f"Error getting user plans: {e}")
             return []
+
+    # ================= FEED =================
 
     def create_post(self, post: Dict) -> Optional[Dict]:
         try:
@@ -285,4 +301,5 @@ class Database:
             return None
 
 
+# 🔥 GLOBAL INSTANCE
 db = Database()
