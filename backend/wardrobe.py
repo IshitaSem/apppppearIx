@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
@@ -111,9 +111,28 @@ def normalize_category(category: str) -> str:
     return CATEGORY_MAP.get(c, c)
 
 
-def normalize_item(item: dict) -> dict:
-    item["category"] = normalize_category(item.get("category", ""))
-    return item
+def build_absolute_url(request: Request, relative_path: str) -> str:
+    if not relative_path:
+        return ""
+    if relative_path.startswith("http://") or relative_path.startswith("https://"):
+        return relative_path
+    return str(request.base_url).rstrip("/") + relative_path
+
+
+def normalize_item(item: dict, request: Optional[Request] = None) -> dict:
+    normalized = dict(item)
+    normalized["category"] = normalize_category(normalized.get("category", ""))
+
+    image_url = normalized.get("image_url")
+    original_image_url = normalized.get("original_image_url")
+
+    if request and image_url:
+        normalized["image_url"] = build_absolute_url(request, image_url)
+
+    if request and original_image_url:
+        normalized["original_image_url"] = build_absolute_url(request, original_image_url)
+
+    return normalized
 
 
 class AddItemRequest(BaseModel):
@@ -146,41 +165,38 @@ class UpdateItemRequest(BaseModel):
 
 
 @router.post("/add")
-def add_item(request: AddItemRequest):
+def add_item(request: Request, payload: AddItemRequest):
     item = {
         "id": str(uuid.uuid4()),
-        "user_id": request.user_id,
-        "name": request.name,
-        "category": normalize_category(request.category),
-        "subcategory": request.subcategory,
-        "color": request.color,
-        "secondary_color": request.secondary_color,
-        "pattern": request.pattern,
-        "season": request.season,
-        "occasion": request.occasion,
-        "brand": request.brand,
-        "image_url": request.image_url,
-        "tags": request.tags,
-        "created_at": datetime.utcnow(),
+        "user_id": payload.user_id,
+        "name": payload.name,
+        "category": normalize_category(payload.category),
+        "subcategory": payload.subcategory,
+        "color": payload.color,
+        "secondary_color": payload.secondary_color,
+        "pattern": payload.pattern,
+        "season": payload.season,
+        "occasion": payload.occasion,
+        "brand": payload.brand,
+        "image_url": payload.image_url,
+        "tags": payload.tags,
+        "created_at": datetime.utcnow().isoformat(),
     }
 
     saved_item = db.add_item(item)
     if not saved_item:
         raise HTTPException(status_code=500, detail="Failed to add item")
 
-    saved_item = normalize_item(saved_item)
-
     return {
         "message": "Item added successfully",
-        "item": saved_item,
+        "item": normalize_item(saved_item, request),
     }
 
 
-# Supports frontend call: /wardrobe/all?user_id=...
 @router.get("/all")
-def get_all_items_query(user_id: str = Query(...)):
+def get_all_items_query(request: Request, user_id: str = Query(...)):
     items = db.get_user_items(user_id)
-    items = [normalize_item(item) for item in items]
+    items = [normalize_item(item, request) for item in items]
 
     return {
         "count": len(items),
@@ -188,11 +204,10 @@ def get_all_items_query(user_id: str = Query(...)):
     }
 
 
-# Supports old style call: /wardrobe/all/{user_id}
 @router.get("/all/{user_id}")
-def get_all_items_path(user_id: str):
+def get_all_items_path(request: Request, user_id: str):
     items = db.get_user_items(user_id)
-    items = [normalize_item(item) for item in items]
+    items = [normalize_item(item, request) for item in items]
 
     return {
         "count": len(items),
@@ -200,9 +215,9 @@ def get_all_items_path(user_id: str):
     }
 
 
-# Supports frontend call: /wardrobe/category?user_id=...&category=...
 @router.get("/category")
 def get_items_by_category_query(
+    request: Request,
     user_id: str = Query(...),
     category: str = Query(...)
 ):
@@ -211,9 +226,9 @@ def get_items_by_category_query(
 
     filtered_items = []
     for item in items:
-        item = normalize_item(item)
-        if item["category"] == normalized_category:
-            filtered_items.append(item)
+        normalized_item = normalize_item(item, request)
+        if normalized_item["category"] == normalized_category:
+            filtered_items.append(normalized_item)
 
     return {
         "category": normalized_category,
@@ -222,17 +237,16 @@ def get_items_by_category_query(
     }
 
 
-# Supports old style call: /wardrobe/category/{user_id}/{category}
 @router.get("/category/{user_id}/{category}")
-def get_items_by_category_path(user_id: str, category: str):
+def get_items_by_category_path(request: Request, user_id: str, category: str):
     normalized_category = normalize_category(category)
     items = db.get_user_items(user_id)
 
     filtered_items = []
     for item in items:
-        item = normalize_item(item)
-        if item["category"] == normalized_category:
-            filtered_items.append(item)
+        normalized_item = normalize_item(item, request)
+        if normalized_item["category"] == normalized_category:
+            filtered_items.append(normalized_item)
 
     return {
         "category": normalized_category,
@@ -242,45 +256,45 @@ def get_items_by_category_path(user_id: str, category: str):
 
 
 @router.get("/item/{item_id}")
-def get_item(item_id: str):
+def get_item(request: Request, item_id: str):
     item = db.get_item(item_id)
 
     if not item:
         raise HTTPException(status_code=404, detail="Item not found")
 
-    return normalize_item(item)
+    return normalize_item(item, request)
 
 
 @router.put("/update/{item_id}")
-def update_item(item_id: str, request: UpdateItemRequest):
+def update_item(request: Request, item_id: str, payload: UpdateItemRequest):
     existing_item = db.get_item(item_id)
     if not existing_item:
         raise HTTPException(status_code=404, detail="Item not found")
 
     updates = {}
 
-    if request.name is not None:
-        updates["name"] = request.name
-    if request.category is not None:
-        updates["category"] = normalize_category(request.category)
-    if request.subcategory is not None:
-        updates["subcategory"] = request.subcategory
-    if request.color is not None:
-        updates["color"] = request.color
-    if request.secondary_color is not None:
-        updates["secondary_color"] = request.secondary_color
-    if request.pattern is not None:
-        updates["pattern"] = request.pattern
-    if request.season is not None:
-        updates["season"] = request.season
-    if request.occasion is not None:
-        updates["occasion"] = request.occasion
-    if request.brand is not None:
-        updates["brand"] = request.brand
-    if request.image_url is not None:
-        updates["image_url"] = request.image_url
-    if request.tags is not None:
-        updates["tags"] = request.tags
+    if payload.name is not None:
+        updates["name"] = payload.name
+    if payload.category is not None:
+        updates["category"] = normalize_category(payload.category)
+    if payload.subcategory is not None:
+        updates["subcategory"] = payload.subcategory
+    if payload.color is not None:
+        updates["color"] = payload.color
+    if payload.secondary_color is not None:
+        updates["secondary_color"] = payload.secondary_color
+    if payload.pattern is not None:
+        updates["pattern"] = payload.pattern
+    if payload.season is not None:
+        updates["season"] = payload.season
+    if payload.occasion is not None:
+        updates["occasion"] = payload.occasion
+    if payload.brand is not None:
+        updates["brand"] = payload.brand
+    if payload.image_url is not None:
+        updates["image_url"] = payload.image_url
+    if payload.tags is not None:
+        updates["tags"] = payload.tags
 
     if not updates:
         updated_item = db.get_item(item_id)
@@ -289,7 +303,7 @@ def update_item(item_id: str, request: UpdateItemRequest):
 
         return {
             "message": "No changes provided",
-            "item": normalize_item(updated_item),
+            "item": normalize_item(updated_item, request),
         }
 
     success = db.update_item(item_id, updates)
@@ -302,12 +316,12 @@ def update_item(item_id: str, request: UpdateItemRequest):
 
     return {
         "message": "Item updated successfully",
-        "item": normalize_item(updated_item),
+        "item": normalize_item(updated_item, request),
     }
 
 
 @router.delete("/delete/{item_id}")
-def delete_item(item_id: str):
+def delete_item(request: Request, item_id: str):
     existing_item = db.get_item(item_id)
     if not existing_item:
         raise HTTPException(status_code=404, detail="Item not found")
@@ -318,5 +332,5 @@ def delete_item(item_id: str):
 
     return {
         "message": "Item deleted successfully",
-        "item": normalize_item(existing_item),
+        "item": normalize_item(existing_item, request),
     }
