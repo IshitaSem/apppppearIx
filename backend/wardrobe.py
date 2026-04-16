@@ -9,105 +9,106 @@ from database import db
 router = APIRouter(prefix="/wardrobe", tags=["Wardrobe"])
 
 
+CATEGORY_MAP = {
+    # TOP
+    "top": "top",
+    "tops": "top",
+    "shirt": "top",
+    "shirts": "top",
+    "tshirt": "top",
+    "t-shirts": "top",
+    "t-shirt": "top",
+    "tee": "top",
+    "blouse": "top",
+    "crop top": "top",
+
+    # BOTTOM
+    "bottom": "bottom",
+    "bottoms": "bottom",
+    "jean": "bottom",
+    "jeans": "bottom",
+    "pant": "bottom",
+    "pants": "bottom",
+    "trouser": "bottom",
+    "trousers": "bottom",
+    "skirt": "bottom",
+    "skirts": "bottom",
+    "shorts": "bottom",
+    "legging": "bottom",
+    "leggings": "bottom",
+
+    # DRESS
+    "dress": "dress",
+    "dresses": "dress",
+    "gown": "dress",
+
+    # SHOES
+    "shoe": "shoes",
+    "shoes": "shoes",
+    "sneaker": "shoes",
+    "sneakers": "shoes",
+    "heel": "shoes",
+    "heels": "shoes",
+    "boot": "shoes",
+    "boots": "shoes",
+    "sandal": "shoes",
+    "sandals": "shoes",
+    "loafer": "shoes",
+    "loafers": "shoes",
+    "flat": "shoes",
+    "flats": "shoes",
+
+    # ACCESSORIES
+    "accessory": "accessories",
+    "accessories": "accessories",
+    "bag": "accessories",
+    "bags": "accessories",
+    "belt": "accessories",
+    "belts": "accessories",
+    "watch": "accessories",
+    "watches": "accessories",
+    "jewelry": "accessories",
+    "jewellery": "accessories",
+    "necklace": "accessories",
+    "necklaces": "accessories",
+    "bracelet": "accessories",
+    "bracelets": "accessories",
+    "ring": "accessories",
+    "rings": "accessories",
+    "earring": "accessories",
+    "earrings": "accessories",
+    "scarf": "accessories",
+    "scarves": "accessories",
+    "cap": "accessories",
+    "caps": "accessories",
+    "hat": "accessories",
+    "hats": "accessories",
+
+    # OUTERWEAR
+    "outerwear": "outerwear",
+    "jacket": "outerwear",
+    "jackets": "outerwear",
+    "coat": "outerwear",
+    "coats": "outerwear",
+    "hoodie": "outerwear",
+    "hoodies": "outerwear",
+    "sweater": "outerwear",
+    "sweaters": "outerwear",
+    "blazer": "outerwear",
+    "blazers": "outerwear",
+    "cardigan": "outerwear",
+    "cardigans": "outerwear",
+    "shrug": "outerwear",
+    "shrugs": "outerwear",
+}
+
+
 def normalize_category(category: str) -> str:
     if not category:
         return "other"
 
     c = category.strip().lower()
-
-    mapping = {
-        # TOP
-        "top": "top",
-        "tops": "top",
-        "shirt": "top",
-        "shirts": "top",
-        "tshirt": "top",
-        "t-shirts": "top",
-        "t-shirt": "top",
-        "tee": "top",
-        "blouse": "top",
-        "crop top": "top",
-
-        # BOTTOM
-        "bottom": "bottom",
-        "bottoms": "bottom",
-        "jeans": "bottom",
-        "pant": "bottom",
-        "pants": "bottom",
-        "trouser": "bottom",
-        "trousers": "bottom",
-        "skirt": "bottom",
-        "skirts": "bottom",
-        "shorts": "bottom",
-        "legging": "bottom",
-        "leggings": "bottom",
-
-        # DRESS
-        "dress": "dress",
-        "dresses": "dress",
-        "gown": "dress",
-
-        # SHOES
-        "shoe": "shoes",
-        "shoes": "shoes",
-        "sneaker": "shoes",
-        "sneakers": "shoes",
-        "heel": "shoes",
-        "heels": "shoes",
-        "boot": "shoes",
-        "boots": "shoes",
-        "sandal": "shoes",
-        "sandals": "shoes",
-        "loafer": "shoes",
-        "loafers": "shoes",
-        "flat": "shoes",
-        "flats": "shoes",
-
-        # ACCESSORIES
-        "accessory": "accessories",
-        "accessories": "accessories",
-        "bag": "accessories",
-        "bags": "accessories",
-        "belt": "accessories",
-        "belts": "accessories",
-        "watch": "accessories",
-        "watches": "accessories",
-        "jewelry": "accessories",
-        "jewellery": "accessories",
-        "necklace": "accessories",
-        "necklaces": "accessories",
-        "bracelet": "accessories",
-        "bracelets": "accessories",
-        "ring": "accessories",
-        "rings": "accessories",
-        "earring": "accessories",
-        "earrings": "accessories",
-        "scarf": "accessories",
-        "scarves": "accessories",
-        "cap": "accessories",
-        "caps": "accessories",
-        "hat": "accessories",
-        "hats": "accessories",
-
-        # OUTERWEAR
-        "outerwear": "outerwear",
-        "jacket": "outerwear",
-        "jackets": "outerwear",
-        "coat": "outerwear",
-        "coats": "outerwear",
-        "hoodie": "outerwear",
-        "hoodies": "outerwear",
-        "sweater": "outerwear",
-        "sweaters": "outerwear",
-        "blazer": "outerwear",
-        "blazers": "outerwear",
-        "cardigan": "outerwear",
-        "cardigans": "outerwear",
-        "shrug": "outerwear",
-        "shrugs": "outerwear",
-    }
-
-    return mapping.get(c, c)
+    return CATEGORY_MAP.get(c, c)
 
 
 class AddItemRequest(BaseModel):
@@ -161,6 +162,8 @@ def add_item(request: AddItemRequest):
     saved_item = db.add_item(item)
     if not saved_item:
         raise HTTPException(status_code=500, detail="Failed to add item")
+
+    saved_item["category"] = normalize_category(saved_item.get("category", ""))
 
     return {
         "message": "Item added successfully",
