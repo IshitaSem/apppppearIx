@@ -101,7 +101,6 @@ CATEGORY_MAP = {
 def normalize_category(category: str) -> str:
     if not category:
         return "other"
-
     c = category.strip().lower()
     return CATEGORY_MAP.get(c, c)
 
@@ -113,21 +112,55 @@ def get_public_base_url(request: Request) -> str:
     return str(request.base_url).rstrip("/")
 
 
+def build_clean_image_url(request: Request, item: dict) -> str:
+    base_url = get_public_base_url(request)
+
+    image_path = str(item.get("image_path", "")).strip()
+    image_url_relative = str(item.get("image_url_relative", "")).strip()
+    image_url = str(item.get("image_url", "")).strip()
+
+    # 1. Best source: image_path
+    if image_path:
+        filename = os.path.basename(image_path)
+        return f"{base_url}/uploads/{filename}"
+
+    # 2. Next best: relative upload path
+    if image_url_relative:
+        if not image_url_relative.startswith("/"):
+            image_url_relative = f"/{image_url_relative}"
+        if "/uploads/" in image_url_relative:
+            idx = image_url_relative.index("/uploads/")
+            return f"{base_url}{image_url_relative[idx:]}"
+
+    # 3. Try salvaging stored image_url
+    if image_url:
+        if "/uploads/" in image_url:
+            idx = image_url.index("/uploads/")
+            upload_part = image_url[idx:]
+            return f"{base_url}{upload_part}"
+
+    return ""
+
+
 def normalize_item(item: dict, request: Optional[Request] = None) -> dict:
     normalized = dict(item)
     normalized["category"] = normalize_category(normalized.get("category", ""))
 
-    image_url = normalized.get("image_url")
-    original_image_url = normalized.get("original_image_url")
-
     if request:
-        base_url = get_public_base_url(request)
+        clean_image_url = build_clean_image_url(request, normalized)
+        normalized["image_url"] = clean_image_url
 
-        if image_url and image_url.startswith("/"):
-            normalized["image_url"] = f"{base_url}{image_url}"
+        if clean_image_url and "/uploads/" in clean_image_url:
+            normalized["image_url_relative"] = clean_image_url.replace(
+                get_public_base_url(request), ""
+            )
 
-        if original_image_url and original_image_url.startswith("/"):
-            normalized["original_image_url"] = f"{base_url}{original_image_url}"
+        original_image_url = str(normalized.get("original_image_url", "")).strip()
+        if original_image_url and "/uploads/" in original_image_url:
+            idx = original_image_url.index("/uploads/")
+            normalized["original_image_url"] = (
+                f"{get_public_base_url(request)}{original_image_url[idx:]}"
+            )
 
     return normalized
 
@@ -184,11 +217,9 @@ def add_item(request: Request, payload: AddItemRequest):
     if not saved_item:
         raise HTTPException(status_code=500, detail="Failed to add item")
 
-    saved_item = normalize_item(saved_item, request)
-
     return {
         "message": "Item added successfully",
-        "item": saved_item,
+        "item": normalize_item(saved_item, request),
     }
 
 
