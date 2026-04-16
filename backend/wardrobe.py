@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from typing import Optional, List
 from datetime import datetime
 import uuid
+import os
 
 from database import db
 
@@ -10,7 +11,6 @@ router = APIRouter(prefix="/wardrobe", tags=["Wardrobe"])
 
 
 CATEGORY_MAP = {
-    # TOP
     "top": "top",
     "tops": "top",
     "shirt": "top",
@@ -22,7 +22,6 @@ CATEGORY_MAP = {
     "blouse": "top",
     "crop top": "top",
 
-    # BOTTOM
     "bottom": "bottom",
     "bottoms": "bottom",
     "jean": "bottom",
@@ -37,12 +36,10 @@ CATEGORY_MAP = {
     "legging": "bottom",
     "leggings": "bottom",
 
-    # DRESS
     "dress": "dress",
     "dresses": "dress",
     "gown": "dress",
 
-    # SHOES
     "shoe": "shoes",
     "shoes": "shoes",
     "sneaker": "shoes",
@@ -58,7 +55,6 @@ CATEGORY_MAP = {
     "flat": "shoes",
     "flats": "shoes",
 
-    # ACCESSORIES
     "accessory": "accessories",
     "accessories": "accessories",
     "bag": "accessories",
@@ -84,7 +80,6 @@ CATEGORY_MAP = {
     "hat": "accessories",
     "hats": "accessories",
 
-    # OUTERWEAR
     "outerwear": "outerwear",
     "jacket": "outerwear",
     "jackets": "outerwear",
@@ -111,12 +106,11 @@ def normalize_category(category: str) -> str:
     return CATEGORY_MAP.get(c, c)
 
 
-def build_absolute_url(request: Request, relative_path: str) -> str:
-    if not relative_path:
-        return ""
-    if relative_path.startswith("http://") or relative_path.startswith("https://"):
-        return relative_path
-    return str(request.base_url).rstrip("/") + relative_path
+def get_public_base_url(request: Request) -> str:
+    env_url = os.getenv("BACKEND_PUBLIC_BASE_URL", "").strip()
+    if env_url:
+        return env_url.rstrip("/")
+    return str(request.base_url).rstrip("/)
 
 
 def normalize_item(item: dict, request: Optional[Request] = None) -> dict:
@@ -126,11 +120,14 @@ def normalize_item(item: dict, request: Optional[Request] = None) -> dict:
     image_url = normalized.get("image_url")
     original_image_url = normalized.get("original_image_url")
 
-    if request and image_url:
-        normalized["image_url"] = build_absolute_url(request, image_url)
+    if request:
+        base_url = get_public_base_url(request)
 
-    if request and original_image_url:
-        normalized["original_image_url"] = build_absolute_url(request, original_image_url)
+        if image_url and image_url.startswith("/"):
+            normalized["image_url"] = f"{base_url}{image_url}"
+
+        if original_image_url and original_image_url.startswith("/"):
+            normalized["original_image_url"] = f"{base_url}{original_image_url}"
 
     return normalized
 
@@ -187,9 +184,11 @@ def add_item(request: Request, payload: AddItemRequest):
     if not saved_item:
         raise HTTPException(status_code=500, detail="Failed to add item")
 
+    saved_item = normalize_item(saved_item, request)
+
     return {
         "message": "Item added successfully",
-        "item": normalize_item(saved_item, request),
+        "item": saved_item,
     }
 
 
@@ -226,9 +225,9 @@ def get_items_by_category_query(
 
     filtered_items = []
     for item in items:
-        normalized_item = normalize_item(item, request)
-        if normalized_item["category"] == normalized_category:
-            filtered_items.append(normalized_item)
+        item = normalize_item(item, request)
+        if item["category"] == normalized_category:
+            filtered_items.append(item)
 
     return {
         "category": normalized_category,
@@ -244,9 +243,9 @@ def get_items_by_category_path(request: Request, user_id: str, category: str):
 
     filtered_items = []
     for item in items:
-        normalized_item = normalize_item(item, request)
-        if normalized_item["category"] == normalized_category:
-            filtered_items.append(normalized_item)
+        item = normalize_item(item, request)
+        if item["category"] == normalized_category:
+            filtered_items.append(item)
 
     return {
         "category": normalized_category,
@@ -266,35 +265,35 @@ def get_item(request: Request, item_id: str):
 
 
 @router.put("/update/{item_id}")
-def update_item(request: Request, item_id: str, payload: UpdateItemRequest):
+def update_item(item_id: str, request_body: UpdateItemRequest, request: Request):
     existing_item = db.get_item(item_id)
     if not existing_item:
         raise HTTPException(status_code=404, detail="Item not found")
 
     updates = {}
 
-    if payload.name is not None:
-        updates["name"] = payload.name
-    if payload.category is not None:
-        updates["category"] = normalize_category(payload.category)
-    if payload.subcategory is not None:
-        updates["subcategory"] = payload.subcategory
-    if payload.color is not None:
-        updates["color"] = payload.color
-    if payload.secondary_color is not None:
-        updates["secondary_color"] = payload.secondary_color
-    if payload.pattern is not None:
-        updates["pattern"] = payload.pattern
-    if payload.season is not None:
-        updates["season"] = payload.season
-    if payload.occasion is not None:
-        updates["occasion"] = payload.occasion
-    if payload.brand is not None:
-        updates["brand"] = payload.brand
-    if payload.image_url is not None:
-        updates["image_url"] = payload.image_url
-    if payload.tags is not None:
-        updates["tags"] = payload.tags
+    if request_body.name is not None:
+        updates["name"] = request_body.name
+    if request_body.category is not None:
+        updates["category"] = normalize_category(request_body.category)
+    if request_body.subcategory is not None:
+        updates["subcategory"] = request_body.subcategory
+    if request_body.color is not None:
+        updates["color"] = request_body.color
+    if request_body.secondary_color is not None:
+        updates["secondary_color"] = request_body.secondary_color
+    if request_body.pattern is not None:
+        updates["pattern"] = request_body.pattern
+    if request_body.season is not None:
+        updates["season"] = request_body.season
+    if request_body.occasion is not None:
+        updates["occasion"] = request_body.occasion
+    if request_body.brand is not None:
+        updates["brand"] = request_body.brand
+    if request_body.image_url is not None:
+        updates["image_url"] = request_body.image_url
+    if request_body.tags is not None:
+        updates["tags"] = request_body.tags
 
     if not updates:
         updated_item = db.get_item(item_id)
