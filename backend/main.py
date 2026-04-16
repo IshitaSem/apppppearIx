@@ -39,21 +39,35 @@ async def startup_event():
     logger.info(f"UPLOADS_DIR: {UPLOADS_DIR}")
     logger.info(f"Uploads directory exists: {os.path.exists(UPLOADS_DIR)}")
 
+    try:
+        files = os.listdir(UPLOADS_DIR)
+        logger.info(f"Uploads file count: {len(files)}")
+        logger.info(f"Uploads sample files: {files[:10]}")
+    except Exception as e:
+        logger.warning(f"Could not inspect uploads folder: {e}")
+
 
 @app.get("/")
 def home():
     return {
         "message": "Appearix Backend is running",
         "uploads_url": "/uploads",
+        "uploads_dir": UPLOADS_DIR,
     }
 
 
 @app.get("/health")
 def health():
+    try:
+        files = os.listdir(UPLOADS_DIR)
+    except Exception:
+        files = []
+
     return {
         "status": "healthy",
         "uploads_dir": UPLOADS_DIR,
         "uploads_exists": os.path.exists(UPLOADS_DIR),
+        "uploads_file_count": len(files),
     }
 
 
