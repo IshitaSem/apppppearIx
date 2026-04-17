@@ -1,307 +1,291 @@
-from fastapi import APIRouter, HTTPException, Request
-from database import db
-import os
+from fastapi import APIRouter, HTTPException
+from database import wardrobe_items
+from pydantic import BaseModel
+from typing import Optional, List, Dict, Any
+import random
 
 router = APIRouter(prefix="/ai", tags=["AI Stylist"])
 
 
-CATEGORY_MAP = {
-    "top": "top",
-    "tops": "top",
-    "shirt": "top",
-    "shirts": "top",
-    "tshirt": "top",
-    "t-shirt": "top",
-    "t-shirts": "top",
-    "tee": "top",
-    "blouse": "top",
-    "crop top": "top",
-
-    "bottom": "bottom",
-    "bottoms": "bottom",
-    "jean": "bottom",
-    "jeans": "bottom",
-    "pant": "bottom",
-    "pants": "bottom",
-    "trouser": "bottom",
-    "trousers": "bottom",
-    "skirt": "bottom",
-    "skirts": "bottom",
-    "shorts": "bottom",
-    "legging": "bottom",
-    "leggings": "bottom",
-
-    "dress": "dress",
-    "dresses": "dress",
-    "gown": "dress",
-
-    "shoe": "shoes",
-    "shoes": "shoes",
-    "sneaker": "shoes",
-    "sneakers": "shoes",
-    "heel": "shoes",
-    "heels": "shoes",
-    "boot": "shoes",
-    "boots": "shoes",
-    "sandal": "shoes",
-    "sandals": "shoes",
-    "loafer": "shoes",
-    "loafers": "shoes",
-    "flat": "shoes",
-    "flats": "shoes",
-
-    "accessory": "accessories",
-    "accessories": "accessories",
-    "bag": "accessories",
-    "bags": "accessories",
-    "belt": "accessories",
-    "belts": "accessories",
-    "watch": "accessories",
-    "watches": "accessories",
-    "jewelry": "accessories",
-    "jewellery": "accessories",
-    "necklace": "accessories",
-    "necklaces": "accessories",
-    "bracelet": "accessories",
-    "bracelets": "accessories",
-    "ring": "accessories",
-    "rings": "accessories",
-    "earring": "accessories",
-    "earrings": "accessories",
-    "scarf": "accessories",
-    "scarves": "accessories",
-    "cap": "accessories",
-    "caps": "accessories",
-    "hat": "accessories",
-    "hats": "accessories",
-
-    "outerwear": "outerwear",
-    "jacket": "outerwear",
-    "jackets": "outerwear",
-    "coat": "outerwear",
-    "coats": "outerwear",
-    "hoodie": "outerwear",
-    "hoodies": "outerwear",
-    "sweater": "outerwear",
-    "sweaters": "outerwear",
-    "blazer": "outerwear",
-    "blazers": "outerwear",
-    "cardigan": "outerwear",
-    "cardigans": "outerwear",
-    "shrug": "outerwear",
-    "shrugs": "outerwear",
-}
+class GenerateOutfitRequest(BaseModel):
+    user_id: str
+    occasion: str
+    season: Optional[str] = None
 
 
-def normalize_category(category: str) -> str:
-    if not category:
-        return "other"
-    c = str(category).strip().lower()
-    return CATEGORY_MAP.get(c, c)
+def normalize_text(value: Optional[str]) -> str:
+    return (value or "").strip().lower()
 
 
-def get_public_base_url(request: Request) -> str:
-    env_url = os.getenv("BACKEND_PUBLIC_BASE_URL", "").strip()
-    if env_url:
-        return env_url.rstrip("/")
-    return str(request.base_url).rstrip("/")
+def get_item_category(item: Dict[str, Any]) -> str:
+    return normalize_text(item.get("category"))
 
 
-def build_clean_image_url(request: Request, item: dict) -> str:
-    base_url = get_public_base_url(request)
-
-    image_path = str(item.get("image_path", "")).strip()
-    image_url_relative = str(item.get("image_url_relative", "")).strip()
-    image_url = str(item.get("image_url", "")).strip()
-
-    if image_path:
-        filename = os.path.basename(image_path)
-        return f"{base_url}/uploads/{filename}"
-
-    if image_url_relative:
-        if not image_url_relative.startswith("/"):
-            image_url_relative = f"/{image_url_relative}"
-        if "/uploads/" in image_url_relative:
-            idx = image_url_relative.index("/uploads/")
-            return f"{base_url}{image_url_relative[idx:]}"
-
-    if image_url:
-        if image_url.startswith("http://") or image_url.startswith("https://"):
-            return image_url
-        if "/uploads/" in image_url:
-            idx = image_url.index("/uploads/")
-            return f"{base_url}{image_url[idx:]}"
-
-    return ""
+def get_item_subcategory(item: Dict[str, Any]) -> str:
+    return normalize_text(item.get("subcategory"))
 
 
-def serialize_item(request: Request, item: dict) -> dict:
-    if not item:
-        return {}
-
-    return {
-        "id": str(item.get("id", "")),
-        "user_id": str(item.get("user_id", "")),
-        "name": item.get("name", ""),
-        "category": normalize_category(item.get("category", "")),
-        "subcategory": item.get("subcategory"),
-        "color": item.get("color", "unknown"),
-        "secondary_color": item.get("secondary_color"),
-        "pattern": item.get("pattern"),
-        "season": item.get("season"),
-        "occasion": item.get("occasion"),
-        "brand": item.get("brand"),
-        "image_path": str(item.get("image_path", "")).strip(),
-        "image_url": build_clean_image_url(request, item),
-        "tags": item.get("tags", []),
-        "created_at": str(item.get("created_at", "")),
-    }
+def get_item_name(item: Dict[str, Any]) -> str:
+    return normalize_text(item.get("name"))
 
 
-def categorize_items(items: list[dict]) -> dict:
-    grouped = {
-        "top": [],
-        "bottom": [],
-        "dress": [],
-        "shoes": [],
-        "accessories": [],
-        "outerwear": [],
-        "other": [],
-    }
+def matches_any(text: str, words: List[str]) -> bool:
+    return any(word in text for word in words)
 
-    for item in items:
-        category = normalize_category(item.get("category", ""))
-        if category in grouped:
-            grouped[category].append(item)
-        else:
-            grouped["other"].append(item)
 
-    return grouped
+def is_top(item: Dict[str, Any]) -> bool:
+    category = get_item_category(item)
+    subcategory = get_item_subcategory(item)
+    name = get_item_name(item)
+
+    return (
+        category in ["top", "tops", "shirt", "tshirt", "t-shirt", "blouse"]
+        or matches_any(subcategory, ["top", "shirt", "tshirt", "t-shirt", "blouse", "kurti"])
+        or matches_any(name, ["top", "shirt", "tshirt", "t-shirt", "blouse", "kurti"])
+    )
+
+
+def is_bottom(item: Dict[str, Any]) -> bool:
+    category = get_item_category(item)
+    subcategory = get_item_subcategory(item)
+    name = get_item_name(item)
+
+    return (
+        category in ["bottom", "bottoms", "jeans", "trousers", "pants", "skirt"]
+        or matches_any(subcategory, ["bottom", "jeans", "trouser", "pants", "skirt", "palazzo"])
+        or matches_any(name, ["jeans", "trouser", "pants", "skirt", "palazzo"])
+    )
+
+
+def is_dress(item: Dict[str, Any]) -> bool:
+    category = get_item_category(item)
+    subcategory = get_item_subcategory(item)
+    name = get_item_name(item)
+
+    return (
+        category in ["dress", "dresses", "gown"]
+        or matches_any(subcategory, ["dress", "gown", "one piece", "one-piece"])
+        or matches_any(name, ["dress", "gown", "one piece", "one-piece"])
+    )
+
+
+def is_shoes(item: Dict[str, Any]) -> bool:
+    category = get_item_category(item)
+    subcategory = get_item_subcategory(item)
+    name = get_item_name(item)
+
+    return (
+        category in ["shoes", "shoe", "footwear", "sneakers", "heels"]
+        or matches_any(subcategory, ["shoe", "footwear", "sneaker", "heel", "loafer", "boots", "sandals"])
+        or matches_any(name, ["shoe", "footwear", "sneaker", "heel", "loafer", "boots", "sandals"])
+    )
+
+
+def is_accessory(item: Dict[str, Any]) -> bool:
+    category = get_item_category(item)
+    subcategory = get_item_subcategory(item)
+    name = get_item_name(item)
+
+    return (
+        category in ["accessories", "accessory", "jewelry", "bag"]
+        or matches_any(subcategory, ["accessory", "jewelry", "bag", "watch", "belt", "scarf"])
+        or matches_any(name, ["bag", "watch", "belt", "scarf", "earring", "necklace", "bracelet"])
+    )
+
+
+def is_outerwear(item: Dict[str, Any]) -> bool:
+    category = get_item_category(item)
+    subcategory = get_item_subcategory(item)
+    name = get_item_name(item)
+
+    return (
+        category in ["outerwear", "outer layer", "jacket", "coat", "blazer", "hoodie", "cardigan", "sweater"]
+        or matches_any(subcategory, ["outerwear", "jacket", "coat", "blazer", "hoodie", "cardigan", "sweater"])
+        or matches_any(name, ["jacket", "coat", "blazer", "hoodie", "cardigan", "sweater", "shrug"])
+    )
+
+
+def pick_best_outer_layer(outerwear_items: List[Dict[str, Any]], occasion: str, season: str) -> Optional[Dict[str, Any]]:
+    if not outerwear_items:
+        return None
+
+    occasion = normalize_text(occasion)
+    season = normalize_text(season)
+
+    formal_words = ["formal", "office", "interview", "party"]
+    casual_words = ["casual", "college", "daily", "day out", "outing"]
+    winter_words = ["winter", "cold"]
+
+    if occasion in formal_words:
+        blazers = [
+            item for item in outerwear_items
+            if matches_any(
+                f"{get_item_category(item)} {get_item_subcategory(item)} {get_item_name(item)}",
+                ["blazer", "coat"]
+            )
+        ]
+        if blazers:
+            return random.choice(blazers)
+
+    if occasion in casual_words:
+        casual_outer = [
+            item for item in outerwear_items
+            if matches_any(
+                f"{get_item_category(item)} {get_item_subcategory(item)} {get_item_name(item)}",
+                ["jacket", "hoodie", "cardigan", "shrug", "sweater"]
+            )
+        ]
+        if casual_outer:
+            return random.choice(casual_outer)
+
+    if season in winter_words:
+        winter_outer = [
+            item for item in outerwear_items
+            if matches_any(
+                f"{get_item_category(item)} {get_item_subcategory(item)} {get_item_name(item)}",
+                ["coat", "jacket", "hoodie", "cardigan", "sweater", "blazer"]
+            )
+        ]
+        if winter_outer:
+            return random.choice(winter_outer)
+
+    return random.choice(outerwear_items)
+
+
+def pick_matching_shoes(shoes: List[Dict[str, Any]], occasion: str) -> Optional[Dict[str, Any]]:
+    if not shoes:
+        return None
+
+    occasion = normalize_text(occasion)
+
+    formal_shoes = [
+        item for item in shoes
+        if matches_any(
+            f"{get_item_category(item)} {get_item_subcategory(item)} {get_item_name(item)}",
+            ["heels", "heel", "loafer", "formal", "boots"]
+        )
+    ]
+
+    casual_shoes = [
+        item for item in shoes
+        if matches_any(
+            f"{get_item_category(item)} {get_item_subcategory(item)} {get_item_name(item)}",
+            ["sneaker", "sandals", "casual", "shoe"]
+        )
+    ]
+
+    if occasion in ["formal", "office", "interview", "party"] and formal_shoes:
+        return random.choice(formal_shoes)
+
+    if occasion in ["casual", "college", "daily", "outing"] and casual_shoes:
+        return random.choice(casual_shoes)
+
+    return random.choice(shoes)
+
+
+def pick_accessories(accessories: List[Dict[str, Any]], limit: int = 2) -> List[Dict[str, Any]]:
+    if not accessories:
+        return []
+    random.shuffle(accessories)
+    return accessories[:limit]
 
 
 @router.get("/generate-outfit")
-def generate_outfit(request: Request, user_id: str, occasion: str):
-    items = db.get_user_items(user_id)
+def generate_outfit(user_id: str, occasion: str, season: Optional[str] = None):
+    user_id = normalize_text(user_id)
+    occasion = normalize_text(occasion)
+    season = normalize_text(season)
+
+    items = [
+        item for item in wardrobe_items
+        if normalize_text(item.get("user_id")) == user_id
+    ]
 
     if not items:
-        raise HTTPException(
-            status_code=404,
-            detail="No wardrobe items found for this user"
-        )
+        raise HTTPException(status_code=404, detail="No wardrobe items found for this user")
 
-    grouped = categorize_items(items)
+    tops = [item for item in items if is_top(item)]
+    bottoms = [item for item in items if is_bottom(item)]
+    dresses = [item for item in items if is_dress(item)]
+    shoes = [item for item in items if is_shoes(item)]
+    accessories = [item for item in items if is_accessory(item)]
+    outerwear = [item for item in items if is_outerwear(item)]
 
-    tops = grouped["top"]
-    bottoms = grouped["bottom"]
-    dresses = grouped["dress"]
-    shoes = grouped["shoes"]
-    accessories = grouped["accessories"]
-    outerwear = grouped["outerwear"]
+    outfit = {
+        "top": None,
+        "bottom": None,
+        "dress": None,
+        "outer_layer": None,
+        "shoes": None,
+        "accessories": [],
+        "notes": []
+    }
 
-    occasion_lower = occasion.strip().lower()
-
-    outfit_items = []
-    notes = []
-
-    # Primary outfit choice
-    if occasion_lower in ["casual", "casual day", "college", "daily", "everyday"]:
+    # Main outfit selection
+    if occasion in ["casual", "college", "daily", "outing"]:
         if tops and bottoms:
-            outfit_items.append(serialize_item(request, tops[0]))
-            outfit_items.append(serialize_item(request, bottoms[0]))
-            notes.append("Picked a casual top and bottom combination.")
+            outfit["top"] = random.choice(tops)
+            outfit["bottom"] = random.choice(bottoms)
+            outfit["notes"].append("Selected a casual main outfit using a top and bottom.")
         elif dresses:
-            outfit_items.append(serialize_item(request, dresses[0]))
-            notes.append("Picked an easy casual dress option.")
-        elif tops:
-            outfit_items.append(serialize_item(request, tops[0]))
-            notes.append("Picked a casual top from available wardrobe items.")
-        elif bottoms:
-            outfit_items.append(serialize_item(request, bottoms[0]))
-            notes.append("Picked a casual bottom from available wardrobe items.")
+            outfit["dress"] = random.choice(dresses)
+            outfit["notes"].append("Selected a casual dress because separate top/bottom was not available.")
         else:
-            raise HTTPException(
-                status_code=400,
-                detail="No suitable casual clothing items found in wardrobe"
-            )
+            raise HTTPException(status_code=400, detail="Not enough wardrobe items to create a casual outfit")
 
-    elif occasion_lower in ["formal", "office", "interview"]:
+    elif occasion in ["formal", "office", "interview", "party"]:
         if dresses:
-            outfit_items.append(serialize_item(request, dresses[0]))
-            notes.append("Picked a dress suitable for a formal occasion.")
+            outfit["dress"] = random.choice(dresses)
+            outfit["notes"].append("Selected a dress for a more polished formal look.")
         elif tops and bottoms:
-            outfit_items.append(serialize_item(request, tops[0]))
-            outfit_items.append(serialize_item(request, bottoms[0]))
-            notes.append("Picked a polished top and bottom combination.")
-        elif tops:
-            outfit_items.append(serialize_item(request, tops[0]))
-            notes.append("Picked a formal top from available wardrobe items.")
+            outfit["top"] = random.choice(tops)
+            outfit["bottom"] = random.choice(bottoms)
+            outfit["notes"].append("Selected a formal-style top and bottom combination.")
         else:
-            raise HTTPException(
-                status_code=400,
-                detail="No suitable formal clothing items found in wardrobe"
-            )
-
-    elif occasion_lower in ["party", "evening", "special occasion"]:
-        if dresses:
-            outfit_items.append(serialize_item(request, dresses[0]))
-            notes.append("Picked a dress suitable for a party look.")
-        elif tops and bottoms:
-            outfit_items.append(serialize_item(request, tops[0]))
-            outfit_items.append(serialize_item(request, bottoms[0]))
-            notes.append("Picked a stylish top and bottom combination.")
-        elif tops:
-            outfit_items.append(serialize_item(request, tops[0]))
-            notes.append("Picked a standout top from available wardrobe items.")
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail="No suitable party clothing items found in wardrobe"
-            )
+            raise HTTPException(status_code=400, detail="Not enough wardrobe items to create a formal outfit")
 
     else:
         if tops and bottoms:
-            outfit_items.append(serialize_item(request, tops[0]))
-            outfit_items.append(serialize_item(request, bottoms[0]))
-            notes.append("Picked a balanced outfit from available wardrobe items.")
+            outfit["top"] = random.choice(tops)
+            outfit["bottom"] = random.choice(bottoms)
+            outfit["notes"].append("Selected a general outfit using available top and bottom.")
         elif dresses:
-            outfit_items.append(serialize_item(request, dresses[0]))
-            notes.append("Picked a dress from available wardrobe items.")
-        elif tops:
-            outfit_items.append(serialize_item(request, tops[0]))
-            notes.append("Picked a top from available wardrobe items.")
-        elif bottoms:
-            outfit_items.append(serialize_item(request, bottoms[0]))
-            notes.append("Picked a bottom from available wardrobe items.")
+            outfit["dress"] = random.choice(dresses)
+            outfit["notes"].append("Selected a general dress outfit.")
         else:
-            raise HTTPException(
-                status_code=400,
-                detail="No suitable clothing items found in wardrobe"
-            )
+            raise HTTPException(status_code=400, detail="Not enough wardrobe items to create an outfit")
 
-    # Optional add-ons
-    if outerwear:
-        if occasion_lower in ["formal", "office", "interview", "party", "evening", "special occasion"]:
-            outfit_items.append(serialize_item(request, outerwear[0]))
-            notes.append("Added outerwear for styling.")
+    # Outer layer logic
+    should_add_outer_layer = False
 
-    if shoes:
-        outfit_items.append(serialize_item(request, shoes[0]))
-        notes.append("Added shoes to complete the look.")
+    if season in ["winter", "cold"]:
+        should_add_outer_layer = True
+        outfit["notes"].append("Outer layer added because season is winter/cold.")
 
-    if accessories:
-        outfit_items.append(serialize_item(request, accessories[0]))
-        notes.append("Added an accessory for styling.")
+    if occasion in ["formal", "office", "interview", "party", "college"]:
+        should_add_outer_layer = True
+        outfit["notes"].append("Outer layer considered based on occasion styling.")
 
-    if not outfit_items:
-        raise HTTPException(
-            status_code=400,
-            detail="Could not build an outfit from available items"
-        )
+    if should_add_outer_layer and outerwear:
+        outfit["outer_layer"] = pick_best_outer_layer(outerwear, occasion, season)
+        outfit["notes"].append("Selected a matching outer layer from wardrobe.")
+    else:
+        outfit["notes"].append("No outer layer added.")
+
+    # Shoes
+    outfit["shoes"] = pick_matching_shoes(shoes, occasion)
+    if outfit["shoes"]:
+        outfit["notes"].append("Matching shoes added to complete the look.")
+
+    # Accessories
+    outfit["accessories"] = pick_accessories(accessories, limit=2)
+    if outfit["accessories"]:
+        outfit["notes"].append("Accessories added to enhance the outfit.")
 
     return {
         "success": True,
-        "occasion": occasion,
         "user_id": user_id,
-        "items": outfit_items,
-        "notes": notes,
+        "occasion": occasion,
+        "season": season if season else "not provided",
+        "outfit": outfit
     }
